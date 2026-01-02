@@ -142,6 +142,22 @@ class ClaudeSession {
     const thinkingLabel =
       { 0: "off", 10000: "normal", 50000: "deep" }[thinkingTokens] || String(thinkingTokens);
 
+    // Inject current date/time at session start so Claude doesn't need to call a tool for it
+    let messageToSend = message;
+    if (isNewSession) {
+      const now = new Date();
+      const datePrefix = `[Current date/time: ${now.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      })}]\n\n`;
+      messageToSend = datePrefix + message;
+    }
+
     // Build SDK V1 options - supports all features
     const options = {
       model: "claude-sonnet-4-20250514",
@@ -188,7 +204,7 @@ class ClaudeSession {
     try {
       // Use V1 query() API - supports all options including cwd, mcpServers, etc.
       const queryInstance = query({
-        prompt: message,
+        prompt: messageToSend,
         options: {
           ...options,
           abortController: this.abortController,
