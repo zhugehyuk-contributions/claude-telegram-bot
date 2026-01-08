@@ -77,7 +77,10 @@ export function convertMarkdownToHtml(text: string): string {
   // Restore inline code
   for (let i = 0; i < inlineCodes.length; i++) {
     const escapedCode = escapeHtml(inlineCodes[i]!);
-    text = text.replace(`\x00INLINECODE${i}\x00`, `<code>${escapedCode}</code>`);
+    text = text.replace(
+      `\x00INLINECODE${i}\x00`,
+      `<code>${escapedCode}</code>`
+    );
   }
 
   // Collapse multiple newlines
@@ -107,7 +110,9 @@ function convertBlockquotes(text: string): string {
       inBlockquote = true;
     } else {
       if (inBlockquote) {
-        result.push("<blockquote>" + blockquoteLines.join("\n") + "</blockquote>");
+        result.push(
+          "<blockquote>" + blockquoteLines.join("\n") + "</blockquote>"
+        );
         blockquoteLines.length = 0;
         inBlockquote = false;
       }
@@ -161,12 +166,15 @@ function code(text: string): string {
 /**
  * Format tool use for display in Telegram with HTML formatting.
  */
-export function formatToolStatus(toolName: string, toolInput: Record<string, unknown>): string {
+export function formatToolStatus(
+  toolName: string,
+  toolInput: Record<string, unknown>
+): string {
   const emojiMap: Record<string, string> = {
     Read: "📖",
     Write: "📝",
     Edit: "✏️",
-    Bash: "💻",
+    Bash: "▶️",
     Glob: "🔍",
     Grep: "🔎",
     WebSearch: "🔍",
@@ -189,7 +197,16 @@ export function formatToolStatus(toolName: string, toolInput: Record<string, unk
   if (toolName === "Read") {
     const filePath = String(toolInput.file_path || "file");
     const shortPath = shortenPath(filePath);
-    const imageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".ico"];
+    const imageExtensions = [
+      ".jpg",
+      ".jpeg",
+      ".png",
+      ".gif",
+      ".webp",
+      ".bmp",
+      ".svg",
+      ".ico",
+    ];
     if (imageExtensions.some((ext) => filePath.toLowerCase().endsWith(ext))) {
       return "👀 Viewing";
     }
@@ -219,7 +236,9 @@ export function formatToolStatus(toolName: string, toolInput: Record<string, unk
     const pattern = String(toolInput.pattern || "");
     const path = String(toolInput.path || "");
     if (path) {
-      return `${emoji} Searching ${code(truncate(pattern, 30))} in ${code(shortenPath(path))}`;
+      return `${emoji} Searching ${code(truncate(pattern, 30))} in ${code(
+        shortenPath(path)
+      )}`;
     }
     return `${emoji} Searching ${code(truncate(pattern, 40))}`;
   }
@@ -247,6 +266,14 @@ export function formatToolStatus(toolName: string, toolInput: Record<string, unk
     return `${emoji} Running agent...`;
   }
 
+  if (toolName === "Skill") {
+    const skillName = String(toolInput.skill || "");
+    if (skillName) {
+      return `💭 Using skill: ${escapeHtml(skillName)}`;
+    }
+    return `💭 Using skill...`;
+  }
+
   if (toolName.startsWith("mcp__")) {
     // Generic MCP tool formatting
     const parts = toolName.split("__");
@@ -269,7 +296,9 @@ export function formatToolStatus(toolName: string, toolInput: Record<string, unk
         "";
 
       if (summary) {
-        return `🔧 ${server} ${action}: ${escapeHtml(truncate(String(summary), 40))}`;
+        return `🔧 ${server} ${action}: ${escapeHtml(
+          truncate(String(summary), 40)
+        )}`;
       }
       return `🔧 ${server}: ${action}`;
     }
