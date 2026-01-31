@@ -162,7 +162,14 @@ export const TRANSCRIPTION_PROMPT = TRANSCRIPTION_CONTEXT
 
 export const TRANSCRIPTION_AVAILABLE = !!OPENAI_API_KEY;
 
-// ============== Thinking Keywords ==============
+// ============== Thinking Configuration ==============
+
+// Default thinking token budget (0 = off, max 128000)
+const defaultThinkingStr = process.env.DEFAULT_THINKING_TOKENS || "0";
+export const DEFAULT_THINKING_TOKENS = Math.min(
+  Math.max(0, parseInt(defaultThinkingStr, 10) || 0),
+  128000
+);
 
 const thinkingKeywordsStr =
   process.env.THINKING_KEYWORDS || "think,pensa,ragiona";

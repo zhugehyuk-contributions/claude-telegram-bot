@@ -14,6 +14,7 @@ import { readFileSync } from "fs";
 import type { Context } from "grammy";
 import {
   ALLOWED_PATHS,
+  DEFAULT_THINKING_TOKENS,
   MCP_SERVERS,
   SAFETY_PROMPT,
   SESSION_FILE,
@@ -30,6 +31,7 @@ import type { SessionData, StatusCallback, TokenUsage } from "./types";
 
 /**
  * Determine thinking token budget based on message keywords.
+ * Returns DEFAULT_THINKING_TOKENS if no keywords match.
  */
 function getThinkingLevel(message: string): number {
   const msgLower = message.toLowerCase();
@@ -44,8 +46,8 @@ function getThinkingLevel(message: string): number {
     return 10000;
   }
 
-  // Default: no thinking
-  return 0;
+  // Default: use configured default (0 if not set)
+  return DEFAULT_THINKING_TOKENS;
 }
 
 /**
