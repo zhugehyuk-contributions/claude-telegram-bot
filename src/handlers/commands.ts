@@ -8,6 +8,7 @@ import type { Context } from "grammy";
 import { session } from "../session";
 import { WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "../config";
 import { isAuthorized } from "../security";
+import { getSchedulerStatus, reloadScheduler } from "../scheduler";
 
 /**
  * /start - Show welcome message and status.
@@ -34,6 +35,7 @@ export async function handleStart(ctx: Context): Promise<void> {
       `/status - Show detailed status\n` +
       `/resume - Resume last session\n` +
       `/retry - Retry last message\n` +
+      `/cron - Scheduled jobs status\n` +
       `/restart - Restart the bot\n\n` +
       `<b>Tips:</b>\n` +
       `• Prefix with <code>!</code> to interrupt current query\n` +
@@ -224,6 +226,37 @@ export async function handleRestart(ctx: Context): Promise<void> {
 
   // Exit - launchd will restart us
   process.exit(0);
+}
+
+/**
+ * /cron - Show cron scheduler status or reload.
+ */
+export async function handleCron(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+
+  if (!isAuthorized(userId, ALLOWED_USERS)) {
+    await ctx.reply("Unauthorized.");
+    return;
+  }
+
+  const text = ctx.message?.text || "";
+  const arg = text.replace("/cron", "").trim().toLowerCase();
+
+  if (arg === "reload") {
+    const count = reloadScheduler();
+    if (count === 0) {
+      await ctx.reply("⚠️ No schedules found in cron.yaml");
+    } else {
+      await ctx.reply(`🔄 Reloaded ${count} scheduled job${count > 1 ? "s" : ""}`);
+    }
+    return;
+  }
+
+  const status = getSchedulerStatus();
+  await ctx.reply(
+    `${status}\n\n<i>Use /cron reload to reload cron.yaml</i>`,
+    { parse_mode: "HTML" }
+  );
 }
 
 /**

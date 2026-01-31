@@ -1,0 +1,41 @@
+# Cron Scheduler Configuration
+#
+# Format: Standard cron expression (minute hour day month weekday)
+# Examples:
+#   "0 * * * *"     - Every hour at :00
+#   "*/30 * * * *"  - Every 30 minutes
+#   "0 9 * * *"     - Daily at 9:00 AM
+#   "0 9 * * 1-5"   - Weekdays at 9:00 AM
+#   "0 0 * * 0"     - Weekly on Sunday at midnight
+#
+# Options:
+#   name: Unique identifier for the job
+#   cron: Cron expression
+#   prompt: The prompt to send to Claude
+#   enabled: true/false (default: true)
+#   notify: Send result to Telegram (default: false)
+
+schedules:
+  - name: heartbeat
+    cron: "0 * * * *"
+    prompt: |
+      HEARTBEAT.md 파일이 있는지 확인해줘. 있으면 그 내용을 읽고 지시대로 따라줘.
+      없으면 조용히 "No HEARTBEAT.md found" 라고만 응답해.
+    enabled: true
+    notify: false
+
+  # Example: Daily status report at 9 AM
+  # - name: daily-report
+  #   cron: "0 9 * * *"
+  #   prompt: |
+  #     Give me a brief status of the project.
+  #     Check git status and any pending tasks.
+  #   enabled: false
+  #   notify: true
+
+  # Example: Every 5 minutes check
+  # - name: quick-check
+  #   cron: "*/5 * * * *"
+  #   prompt: "Is everything running smoothly?"
+  #   enabled: false
+  #   notify: false

@@ -30,11 +30,12 @@ Telegram message → Handler → Auth check → Rate limit → Claude session �
 - **`src/formatting.ts`** - Markdown→HTML conversion for Telegram, tool status emoji formatting
 - **`src/utils.ts`** - Audit logging, voice transcription (OpenAI), typing indicators
 - **`src/types.ts`** - Shared TypeScript types
+- **`src/scheduler.ts`** - Cron scheduler for scheduled prompts (loads `cron.yaml`)
 
 ### Handlers (`src/handlers/`)
 
 Each message type has a dedicated async handler:
-- **`commands.ts`** - `/start`, `/new`, `/stop`, `/status`, `/resume`, `/restart`
+- **`commands.ts`** - `/start`, `/new`, `/stop`, `/status`, `/resume`, `/cron`, `/restart`, `/retry`
 - **`text.ts`** - Text messages with intent filtering
 - **`voice.ts`** - Voice→text via OpenAI, then same flow as text
 - **`photo.ts`** - Image analysis with media group buffering (1s timeout for albums)
@@ -66,6 +67,7 @@ MCP servers defined in `mcp-config.ts`.
 - `/tmp/claude-telegram-session.json` - Session persistence for `/resume`
 - `/tmp/telegram-bot/` - Downloaded photos/documents
 - `/tmp/claude-telegram-audit.log` - Audit log
+- `cron.yaml` - Cron scheduler config (in working directory)
 
 ## Patterns
 

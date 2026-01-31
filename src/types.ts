@@ -75,3 +75,16 @@ export interface PendingMediaGroup {
 
 // Bot context with optional message
 export type BotContext = Context;
+
+// Cron schedule configuration
+export interface CronSchedule {
+  name: string;
+  cron: string;
+  prompt: string;
+  enabled?: boolean;
+  notify?: boolean; // Send result to Telegram (default: false)
+}
+
+export interface CronConfig {
+  schedules: CronSchedule[];
+}

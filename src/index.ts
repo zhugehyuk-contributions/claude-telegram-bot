@@ -16,12 +16,14 @@ import {
   handleResume,
   handleRestart,
   handleRetry,
+  handleCron,
   handleText,
   handleVoice,
   handlePhoto,
   handleDocument,
   handleCallback,
 } from "./handlers";
+import { initScheduler, startScheduler, stopScheduler } from "./scheduler";
 
 // Create bot instance
 const bot = new Bot(TELEGRAM_TOKEN);
@@ -56,6 +58,7 @@ bot.command("status", handleStatus);
 bot.command("resume", handleResume);
 bot.command("restart", handleRestart);
 bot.command("retry", handleRetry);
+bot.command("cron", handleCron);
 
 // ============== Message Handlers ==============
 
@@ -94,6 +97,10 @@ console.log("Starting bot...");
 const botInfo = await bot.api.getMe();
 console.log(`Bot started: @${botInfo.username}`);
 
+// Initialize and start cron scheduler
+initScheduler(bot.api);
+startScheduler();
+
 // Check for pending restart message to update
 if (existsSync(RESTART_FILE)) {
   try {
@@ -120,6 +127,7 @@ const runner = run(bot);
 
 // Graceful shutdown
 const stopRunner = () => {
+  stopScheduler();
   if (runner.isRunning()) {
     console.log("Stopping bot...");
     runner.stop();
