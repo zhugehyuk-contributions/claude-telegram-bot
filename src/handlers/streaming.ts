@@ -177,53 +177,52 @@ export function createStatusCallback(
         if (!state.textMessages.has(segmentId)) {
           const formatted = convertMarkdownToHtml(content);
           try {
-            await ctx.reply(formatted, { parse_mode: "HTML" });
+            const msg = await ctx.reply(formatted, { parse_mode: "HTML" });
+            state.textMessages.set(segmentId, msg);
           } catch {
             await ctx.reply(content);
           }
           return;
         }
 
-        if (state.textMessages.has(segmentId)) {
-          const msg = state.textMessages.get(segmentId)!;
-          const formatted = convertMarkdownToHtml(content);
+        const msg = state.textMessages.get(segmentId)!;
+        const formatted = convertMarkdownToHtml(content);
 
-          // Skip if content unchanged
-          if (formatted === state.lastContent.get(segmentId)) {
-            return;
-          }
+        // Skip if content unchanged
+        if (formatted === state.lastContent.get(segmentId)) {
+          return;
+        }
 
-          if (formatted.length <= TELEGRAM_MESSAGE_LIMIT) {
-            try {
-              await ctx.api.editMessageText(
-                msg.chat.id,
-                msg.message_id,
-                formatted,
-                {
-                  parse_mode: "HTML",
-                }
-              );
-            } catch (error) {
-              console.debug("Failed to edit final message:", error);
-            }
-          } else {
-            // Too long - delete and split
-            try {
-              await ctx.api.deleteMessage(msg.chat.id, msg.message_id);
-            } catch (error) {
-              console.debug("Failed to delete message for splitting:", error);
-            }
-            for (let i = 0; i < formatted.length; i += TELEGRAM_SAFE_LIMIT) {
-              const chunk = formatted.slice(i, i + TELEGRAM_SAFE_LIMIT);
-              try {
-                await ctx.reply(chunk, { parse_mode: "HTML" });
-              } catch (htmlError) {
-                console.debug(
-                  "HTML chunk failed, using plain text:",
-                  htmlError
-                );
-                await ctx.reply(chunk);
+        if (formatted.length <= TELEGRAM_MESSAGE_LIMIT) {
+          try {
+            await ctx.api.editMessageText(
+              msg.chat.id,
+              msg.message_id,
+              formatted,
+              {
+                parse_mode: "HTML",
               }
+            );
+          } catch (error) {
+            console.debug("Failed to edit final message:", error);
+          }
+        } else {
+          // Too long - delete and split
+          try {
+            await ctx.api.deleteMessage(msg.chat.id, msg.message_id);
+          } catch (error) {
+            console.debug("Failed to delete message for splitting:", error);
+          }
+          for (let i = 0; i < formatted.length; i += TELEGRAM_SAFE_LIMIT) {
+            const chunk = formatted.slice(i, i + TELEGRAM_SAFE_LIMIT);
+            try {
+              await ctx.reply(chunk, { parse_mode: "HTML" });
+            } catch (htmlError) {
+              console.debug(
+                "HTML chunk failed, using plain text:",
+                htmlError
+              );
+              await ctx.reply(chunk);
             }
           }
         }
