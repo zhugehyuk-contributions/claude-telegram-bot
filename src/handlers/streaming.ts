@@ -156,12 +156,24 @@ export function createStatusCallback(
 
     // Start update timer (1 second interval)
     state.progressTimer = setInterval(async () => {
-      if (!state.startTime) return;
+      if (!state.startTime || !state.progressMessage) return;
 
       frameIndex++;
 
-      // Recreate at bottom on each tick
-      await recreateProgressMessage();
+      // Update existing message (don't recreate on timer)
+      const spinner = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length];
+      const elapsed = formatElapsed(state.startTime);
+      const text = `${spinner} Working... (${elapsed})`;
+
+      try {
+        await ctx.api.editMessageText(
+          state.progressMessage.chat.id,
+          state.progressMessage.message_id,
+          text
+        );
+      } catch (error) {
+        console.debug('Failed to update progress message:', error);
+      }
     }, 1000);
   }
 
