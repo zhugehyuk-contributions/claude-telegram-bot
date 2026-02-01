@@ -146,23 +146,36 @@ Without this, `pdftotext` won't be found and PDF parsing will fail silently with
 
 ## Development Workflow
 
-**After modifying code**, follow this workflow to ensure quality:
+**CRITICAL: After ANY code changes, ALWAYS follow this workflow in EXACT order:**
 
 ```bash
-# 1. Run PR review (checks code quality, errors, types)
+# 1. Code Review - review-pr skill
+# Check code quality, errors, types, style violations
 /pr-review-toolkit:review-pr
 
-# 2. Fix any critical/important issues found
-# (Edit files to address review findings)
+# 2. Fix critical/important issues
+# Address ALL findings from review before proceeding
 
-# 3. Simplify code for clarity
-# (Uses code-simplifier agent)
+# 3. Code Simplification - code-simplifier agent
+# Simplify and refine code for clarity and maintainability
+/pr-review-toolkit:code-simplifier
 
-# 4. Lint and format
+# 4. Lint and Format
 make lint
 make fmt
 
-# 5. Commit and push
+# 5. Architecture Review - oracle
+# Deep technical review for architecture, design decisions
+/oh-my-claude:oracle "Review the recent code changes for architectural issues, security concerns, and design flaws"
+
+# 6. Security Review
+# Check for vulnerabilities, unsafe patterns, security issues
+/pr-review-toolkit:review-pr --focus security
+
+# 7. Type Check (final verification)
+bun run typecheck
+
+# 8. Commit and push
 git add -A
 git commit -m "feat: description
 
@@ -175,7 +188,12 @@ git commit -m "feat: description
 Co-Authored-By: Z <z@2lab.ai>
 Co-Authored-By: Elon Musk (AI) <elon@2lab.ai>"
 git push
+
+# 9. Deploy
+make up  # Builds, type checks, and restarts service
 ```
+
+**DO NOT SKIP ANY STEP. This workflow is MANDATORY for ALL code changes.**
 
 ### Make Targets
 
