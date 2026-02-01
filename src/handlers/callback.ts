@@ -142,6 +142,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
       await ctx.reply(`❌ Error: ${String(error).slice(0, 200)}`);
     }
   } finally {
+    state.cleanup();
     typing.stop();
   }
 }

@@ -93,6 +93,13 @@ export class StreamingState {
   progressMessage: Message | null = null; // progress spinner message
   progressTimer: Timer | null = null; // timer for updating progress
   startTime: Date | null = null; // work start time
+
+  cleanup() {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
+    }
+  }
 }
 
 /**

@@ -108,6 +108,8 @@ export async function handleText(ctx: Context): Promise<void> {
         );
         await session.kill(); // Clear corrupted session
         await ctx.reply(`⚠️ Claude crashed, retrying...`);
+        // Clean up old state before retry
+        state.cleanup();
         // Reset state for retry
         state = new StreamingState();
         statusCallback = createStatusCallback(ctx, state);
@@ -132,6 +134,7 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   // 10. Cleanup
+  state.cleanup();
   stopProcessing();
   typing.stop();
 }

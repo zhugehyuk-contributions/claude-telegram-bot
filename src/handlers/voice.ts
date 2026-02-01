@@ -63,6 +63,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
   // 5. Start typing indicator for transcription
   const typing = startTypingIndicator(ctx);
+  const state = new StreamingState();
 
   let voicePath: string | null = null;
 
@@ -96,8 +97,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
     // 8. Show transcript
     await ctx.api.editMessageText(chatId, statusMsg.message_id, `🎤 "${transcript}"`);
 
-    // 9. Create streaming state and callback
-    const state = new StreamingState();
+    // 9. Create streaming callback
     const statusCallback = createStatusCallback(ctx, state);
 
     // 10. Send to Claude (with timestamp)
@@ -125,6 +125,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
       await ctx.reply(`❌ Error: ${String(error).slice(0, 200)}`);
     }
   } finally {
+    state.cleanup();
     stopProcessing();
     typing.stop();
 

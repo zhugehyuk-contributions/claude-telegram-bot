@@ -18,6 +18,7 @@ import type { CronConfig, CronSchedule } from "./types";
 const CRON_CONFIG_PATH = resolve(WORKING_DIR, "cron.yaml");
 const MAX_PROMPT_LENGTH = 10000;
 const MAX_JOBS_PER_HOUR = 60;
+const MAX_PENDING_QUEUE_SIZE = 100;
 
 const activeJobs: Map<string, Cron> = new Map();
 let botApi: Api | null = null;
@@ -101,6 +102,10 @@ async function executeScheduledPrompt(schedule: CronSchedule): Promise<void> {
   console.log(`[CRON] Executing scheduled job: ${name}`);
 
   if (cronExecutionLock || session.isRunning) {
+    if (pendingCronJobs.length >= MAX_PENDING_QUEUE_SIZE) {
+      console.warn(`[CRON] Queue full (${MAX_PENDING_QUEUE_SIZE}), dropping oldest job`);
+      pendingCronJobs.shift();
+    }
     console.log(`[CRON] Session busy - queuing job: ${name}`);
     pendingCronJobs.push({ schedule, timestamp: Date.now() });
     return;

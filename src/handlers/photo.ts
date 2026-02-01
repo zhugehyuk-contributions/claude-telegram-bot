@@ -98,6 +98,7 @@ async function processPhotos(
   } catch (error) {
     await handleProcessingError(ctx, error, state.toolMessages);
   } finally {
+    state.cleanup();
     stopProcessing();
     typing.stop();
   }

@@ -215,6 +215,7 @@ async function processArchive(
 ): Promise<void> {
   const stopProcessing = session.startProcessing();
   const typing = startTypingIndicator(ctx);
+  const state = new StreamingState();
 
   // Show extraction progress
   const statusMsg = await ctx.reply(`📦 Extracting <b>${fileName}</b>...`, {
@@ -247,8 +248,7 @@ async function processArchive(
       ? `Archive: ${fileName}\n\nFile tree (${tree.length} files):\n${treeStr}\n\nExtracted contents:\n${contentsStr}\n\n---\n\n${caption}`
       : `Please analyze this archive (${fileName}):\n\nFile tree (${tree.length} files):\n${treeStr}\n\nExtracted contents:\n${contentsStr}`;
 
-    // Create streaming state
-    const state = new StreamingState();
+    // Create streaming callback
     const statusCallback = createStatusCallback(ctx, state);
 
     const response = await session.sendMessageStreaming(
@@ -287,6 +287,7 @@ async function processArchive(
     }
     await ctx.reply(`❌ Failed to process archive: ${String(error).slice(0, 100)}`);
   } finally {
+    state.cleanup();
     stopProcessing();
     typing.stop();
   }
@@ -349,6 +350,7 @@ async function processDocuments(
   } catch (error) {
     await handleProcessingError(ctx, error, state.toolMessages);
   } finally {
+    state.cleanup();
     stopProcessing();
     typing.stop();
   }
