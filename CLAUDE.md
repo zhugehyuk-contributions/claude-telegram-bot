@@ -2,6 +2,35 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Task Management
+
+**CRITICAL: All work must be managed through `bd` (beads issue tracker).**
+
+```bash
+# Before starting ANY work
+bd list                    # List all open issues
+bd show <id>              # Show issue details
+bd create "task name"     # Create new issue
+bd set-state <id> in_progress  # Mark as in progress
+
+# After completing work
+bd close <id>             # Close completed issue
+bd dep <child> <parent>   # Link dependencies
+
+# Quick capture
+bd q "quick task"         # Create and get ID only
+
+# Check what's ready
+bd ready                  # Show ready work (no blockers)
+```
+
+**Workflow:**
+1. Check `bd list` for existing tasks
+2. If no task exists, create with `bd create`
+3. Mark as `in_progress` before starting
+4. Close with `bd close` after completion
+5. **NEVER** start work without a bd task
+
 ## Commands
 
 ```bash
