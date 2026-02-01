@@ -98,7 +98,7 @@ export class StreamingState {
 /**
  * Spinner frames for progress indicator.
  */
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /**
  * Format elapsed time as MM:SS.
@@ -107,7 +107,7 @@ function formatElapsed(startTime: Date): string {
   const elapsed = Math.floor((Date.now() - startTime.getTime()) / 1000);
   const minutes = Math.floor(elapsed / 60);
   const seconds = elapsed % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 /**
@@ -129,7 +129,7 @@ export function createStatusCallback(
           state.progressMessage.message_id
         );
       } catch (error) {
-        console.debug('Failed to delete old progress message:', error);
+        console.debug("Failed to delete old progress message:", error);
       }
     }
 
@@ -142,7 +142,7 @@ export function createStatusCallback(
       try {
         state.progressMessage = await ctx.reply(text);
       } catch (error) {
-        console.debug('Failed to create progress message:', error);
+        console.debug("Failed to create progress message:", error);
       }
     }
   };
@@ -151,12 +151,18 @@ export function createStatusCallback(
   if (!state.startTime) {
     state.startTime = new Date();
 
-    // Create initial progress message
-    recreateProgressMessage();
+    // Create initial progress message (fire-and-forget with explicit error handling)
+    recreateProgressMessage().catch((error) => {
+      console.debug("Failed to create initial progress message:", error);
+    });
 
     // Start update timer (1 second interval)
     state.progressTimer = setInterval(async () => {
-      if (!state.startTime || !state.progressMessage) return;
+      if (!state.startTime) return;
+
+      // Capture current reference to avoid race condition
+      const currentProgressMsg = state.progressMessage;
+      if (!currentProgressMsg) return;
 
       frameIndex++;
 
@@ -167,12 +173,12 @@ export function createStatusCallback(
 
       try {
         await ctx.api.editMessageText(
-          state.progressMessage.chat.id,
-          state.progressMessage.message_id,
+          currentProgressMsg.chat.id,
+          currentProgressMsg.message_id,
           text
         );
       } catch (error) {
-        console.debug('Failed to update progress message:', error);
+        console.debug("Failed to update progress message:", error);
       }
     }, 1000);
   }
@@ -212,11 +218,11 @@ export function createStatusCallback(
             state.textMessages.set(segmentId, msg);
             state.lastContent.set(segmentId, formatted);
           } catch (htmlError) {
-            // HTML parse failed, fall back to plain text
+            // HTML parse failed, fall back to plain text (use display, not formatted)
             console.debug("HTML reply failed, using plain text:", htmlError);
-            const msg = await ctx.reply(formatted);
+            const msg = await ctx.reply(display);
             state.textMessages.set(segmentId, msg);
-            state.lastContent.set(segmentId, formatted);
+            state.lastContent.set(segmentId, display);
           }
           state.lastEditTimes.set(segmentId, now);
 
@@ -230,20 +236,23 @@ export function createStatusCallback(
               ? content.slice(0, TELEGRAM_SAFE_LIMIT) + "..."
               : content;
           const formatted = convertMarkdownToHtml(display);
+
           // Skip if content unchanged
           if (formatted === state.lastContent.get(segmentId)) {
             return;
           }
+
           try {
             await ctx.api.editMessageText(msg.chat.id, msg.message_id, formatted, {
               parse_mode: "HTML",
             });
             state.lastContent.set(segmentId, formatted);
           } catch (htmlError) {
+            // HTML edit failed, try plain text (use display, not formatted)
             console.debug("HTML edit failed, trying plain text:", htmlError);
             try {
-              await ctx.api.editMessageText(msg.chat.id, msg.message_id, formatted);
-              state.lastContent.set(segmentId, formatted);
+              await ctx.api.editMessageText(msg.chat.id, msg.message_id, display);
+              state.lastContent.set(segmentId, display);
             } catch (editError) {
               console.debug("Edit message failed:", editError);
             }
@@ -315,15 +324,15 @@ export function createStatusCallback(
         if (state.progressMessage && state.startTime) {
           const endTime = new Date();
           const duration = formatElapsed(state.startTime);
-          const startStr = state.startTime.toLocaleTimeString('ko-KR', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
+          const startStr = state.startTime.toLocaleTimeString("ko-KR", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
           });
-          const endStr = endTime.toLocaleTimeString('ko-KR', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
+          const endStr = endTime.toLocaleTimeString("ko-KR", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
           });
 
           const completionText = `✅ Completed\n⏰ ${startStr} → ${endStr} (${duration})`;

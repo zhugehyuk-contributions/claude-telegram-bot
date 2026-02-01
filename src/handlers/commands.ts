@@ -9,6 +9,8 @@ import { session } from "../session";
 import { WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "../config";
 import { isAuthorized } from "../security";
 import { getSchedulerStatus, reloadScheduler } from "../scheduler";
+import { fetchAllUsage } from "../usage";
+import type { ClaudeUsage, CodexUsage, GeminiUsage } from "../types";
 
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -18,6 +20,82 @@ function formatDuration(seconds: number): string {
   if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
   if (mins > 0) return `${mins}m ${secs}s`;
   return `${secs}s`;
+}
+
+function formatTimeRemaining(resetTime: string | number | null): string {
+  if (!resetTime) return "";
+
+  const resetMs =
+    typeof resetTime === "number" ? resetTime * 1000 : new Date(resetTime).getTime();
+  const diffMs = resetMs - Date.now();
+
+  if (diffMs <= 0) return "now";
+
+  const diffSec = Math.floor(diffMs / 1000);
+  const days = Math.floor(diffSec / 86400);
+  const hours = Math.floor((diffSec % 86400) / 3600);
+  const mins = Math.floor((diffSec % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function formatClaudeUsage(usage: ClaudeUsage): string[] {
+  const lines: string[] = ["<b>Claude Code:</b>"];
+
+  if (usage.five_hour) {
+    const reset = formatTimeRemaining(usage.five_hour.resets_at);
+    lines.push(
+      `   5h: ${Math.round(usage.five_hour.utilization)}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+  if (usage.seven_day) {
+    const reset = formatTimeRemaining(usage.seven_day.resets_at);
+    lines.push(
+      `   7d: ${Math.round(usage.seven_day.utilization)}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+  if (usage.seven_day_sonnet) {
+    const reset = formatTimeRemaining(usage.seven_day_sonnet.resets_at);
+    lines.push(
+      `   7d Sonnet: ${Math.round(usage.seven_day_sonnet.utilization)}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+
+  return lines;
+}
+
+function formatCodexUsage(usage: CodexUsage): string[] {
+  const lines: string[] = [`<b>OpenAI Codex</b> (${usage.planType}):`];
+
+  if (usage.primary) {
+    const reset = formatTimeRemaining(usage.primary.resetAt);
+    lines.push(
+      `   5h: ${Math.round(usage.primary.usedPercent)}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+  if (usage.secondary) {
+    const reset = formatTimeRemaining(usage.secondary.resetAt);
+    lines.push(
+      `   7d: ${Math.round(usage.secondary.usedPercent)}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+
+  return lines;
+}
+
+function formatGeminiUsage(usage: GeminiUsage): string[] {
+  const lines: string[] = [`<b>Gemini</b> (${usage.model}):`];
+
+  if (usage.usedPercent !== null) {
+    const reset = formatTimeRemaining(usage.resetAt);
+    lines.push(
+      `   Usage: ${usage.usedPercent}%${reset ? ` (resets in ${reset})` : ""}`
+    );
+  }
+
+  return lines;
 }
 
 /**
@@ -360,6 +438,24 @@ export async function handleStats(ctx: Context): Promise<void> {
     }
   }
 
+  // Fetch provider usage in parallel
+  lines.push(`\n🌐 <b>Provider Usage</b>`);
+  const allUsage = await fetchAllUsage();
+
+  if (allUsage.claude) {
+    lines.push(...formatClaudeUsage(allUsage.claude));
+  }
+  if (allUsage.codex) {
+    lines.push(...formatCodexUsage(allUsage.codex));
+  }
+  if (allUsage.gemini) {
+    lines.push(...formatGeminiUsage(allUsage.gemini));
+  }
+
+  if (!allUsage.claude && !allUsage.codex && !allUsage.gemini) {
+    lines.push("   <i>No providers authenticated</i>");
+  }
+
   lines.push(`\n<i>Pricing: Claude Sonnet 4 rates</i>`);
 
   await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
@@ -392,6 +488,12 @@ export async function handleRetry(ctx: Context): Promise<void> {
   await ctx.reply(
     `🔄 Retrying: "${message.slice(0, 50)}${message.length > 50 ? "..." : ""}"`
   );
+
+  // Guard: ensure ctx.message exists before spreading
+  if (!ctx.message) {
+    await ctx.reply("❌ Could not retry: no message context.");
+    return;
+  }
 
   // Simulate sending the message again by emitting a fake text message event
   // We do this by directly calling the text handler logic

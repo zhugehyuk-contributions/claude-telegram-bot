@@ -1,26 +1,44 @@
-.PHONY: up install build lint fmt test stop start restart logs errors status install-service check-service
+.PHONY: up install build lint fmt test stop start restart logs errors status install-service uninstall-service reinstall-service
 
 # Detect OS
 UNAME_S := $(shell uname -s)
 IS_WSL := $(shell if [ -f /proc/version ] && grep -qi microsoft /proc/version; then echo 1; else echo 0; fi)
 
-# Service configuration
-SERVICE_NAME = claude-telegram-bot
-MACOS_PLIST = ~/Library/LaunchAgents/com.claude-telegram-ts.plist
+# Service configuration - reads SERVICE_NAME from .env or uses directory name
+-include .env
+SERVICE_NAME ?= $(notdir $(shell pwd))
+MACOS_PLIST = ~/Library/LaunchAgents/com.$(SERVICE_NAME).plist
 SYSTEMD_SERVICE = ~/.config/systemd/user/$(SERVICE_NAME).service
+PIDFILE = /tmp/$(SERVICE_NAME).pid
+LOGFILE = /tmp/$(SERVICE_NAME).log
+ERRFILE = /tmp/$(SERVICE_NAME).err
+BUN_PATH = $(shell which bun)
 
-# Full deployment pipeline
-up: check-service install build restart
-	@echo "✅ Deployment complete - service restarted"
+# WSL systemd requires DBUS session bus
+SYSTEMCTL := $(if $(filter 1,$(IS_WSL)),DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$$(id -u)/bus systemctl --user,systemctl --user)
 
-# Check if service is installed
-check-service:
-	@if [ "$(UNAME_S)" = "Darwin" ] && [ ! -f $(MACOS_PLIST) ]; then \
-		echo "❌ Service not installed. Run 'make install-service' first"; \
-		exit 1; \
-	elif [ "$(IS_WSL)" = "1" ] && ! systemctl --user is-enabled $(SERVICE_NAME) >/dev/null 2>&1; then \
-		echo "❌ Service not installed. Run 'make install-service' first"; \
-		exit 1; \
+# Full deployment pipeline (reinstalls service on WSL)
+up: install build
+	@echo "🔄 Deploying..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f $(MACOS_PLIST) ]; then \
+			$(MAKE) restart; \
+			echo "✅ Deployment complete - macOS service restarted"; \
+		else \
+			echo "⚠️  macOS: Run 'make install-service' first"; \
+		fi \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		echo "   Updating service file..."; \
+		$(SYSTEMCTL) unmask $(SERVICE_NAME) 2>/dev/null || true; \
+		mkdir -p ~/.config/systemd/user; \
+		printf '[Unit]\nDescription=$(SERVICE_NAME)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\nExecStart=%s run start\nRestart=always\nRestartSec=10\nEnvironment=PATH=%s:/usr/local/bin:/usr/bin:/bin\nStandardOutput=append:$(LOGFILE)\nStandardError=append:$(ERRFILE)\n\n[Install]\nWantedBy=default.target\n' "$(shell pwd)" "$(BUN_PATH)" "$(dir $(BUN_PATH))" > $(SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		$(SYSTEMCTL) enable $(SERVICE_NAME) 2>/dev/null || true; \
+		echo "   Restarting service (will kill current process)..."; \
+		$(SYSTEMCTL) restart $(SERVICE_NAME); \
+		echo "✅ Deployment complete"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
 	fi
 
 # Install dependencies
@@ -60,40 +78,41 @@ test:
 		echo "⚠️  No tests found, skipping..."; \
 	fi
 
-# Stop service
+# Stop service or process
 stop:
-	@echo "🛑 Stopping service..."
-	@if [ "$(UNAME_S)" = "Darwin" ]; then \
-		[ -f $(MACOS_PLIST) ] && \
-			(launchctl unload $(MACOS_PLIST) 2>/dev/null || true; echo "   macOS service stopped") || \
-			echo "   Service not installed"; \
-	elif [ "$(IS_WSL)" = "1" ]; then \
-		systemctl --user is-enabled $(SERVICE_NAME) >/dev/null 2>&1 && \
-			(systemctl --user stop $(SERVICE_NAME); echo "   WSL systemd service stopped") || \
-			echo "   Service not installed"; \
+	@echo "🛑 Stopping..."
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(MACOS_PLIST) ]; then \
+		launchctl unload $(MACOS_PLIST) 2>/dev/null || true; \
+		echo "   macOS service stopped"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-active $(SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) stop $(SERVICE_NAME); \
+		echo "   systemd service stopped"; \
+	elif [ -f $(PIDFILE) ]; then \
+		kill $$(cat $(PIDFILE)) 2>/dev/null && echo "   Process stopped" || echo "   Process already stopped"; \
+		rm -f $(PIDFILE); \
 	else \
-		echo "⚠️  Unsupported platform (use macOS or WSL)"; \
+		echo "   Nothing running"; \
 	fi
 
-# Start service
+# Start service or process
 start:
-	@echo "🚀 Starting service..."
-	@if [ "$(UNAME_S)" = "Darwin" ]; then \
-		if [ -f $(MACOS_PLIST) ]; then \
-			launchctl load $(MACOS_PLIST); sleep 1; \
-			launchctl list | grep com.claude-telegram-ts && echo "   macOS service running" || echo "   ⚠️  Service failed to start"; \
-		else \
-			echo "   ⚠️  Service not installed. Run 'make install-service' first"; \
-		fi \
-	elif [ "$(IS_WSL)" = "1" ]; then \
-		if systemctl --user is-enabled $(SERVICE_NAME) >/dev/null 2>&1; then \
-			systemctl --user start $(SERVICE_NAME); sleep 1; \
-			systemctl --user is-active $(SERVICE_NAME) && echo "   WSL systemd service running" || echo "   ⚠️  Service failed to start"; \
-		else \
-			echo "   ⚠️  Service not installed. Run 'make install-service' first"; \
-		fi \
+	@echo "🚀 Starting..."
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(MACOS_PLIST) ]; then \
+		launchctl load $(MACOS_PLIST); sleep 1; \
+		launchctl list | grep com.claude-telegram-ts && echo "   macOS service running" || echo "   ⚠️  Failed to start"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-enabled $(SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) start $(SERVICE_NAME); sleep 1; \
+		$(SYSTEMCTL) is-active $(SERVICE_NAME) && echo "   systemd service running" || echo "   ⚠️  Failed to start"; \
 	else \
-		echo "⚠️  Unsupported platform (use macOS or WSL)"; \
+		nohup bun run src/index.ts >$(LOGFILE) 2>&1 & \
+		echo $$! > $(PIDFILE); \
+		sleep 1; \
+		if kill -0 $$(cat $(PIDFILE)) 2>/dev/null; then \
+			echo "   Bot running (PID: $$(cat $(PIDFILE)))"; \
+		else \
+			echo "   ⚠️  Failed to start"; \
+			rm -f $(PIDFILE); \
+		fi \
 	fi
 
 # Restart service (includes graceful shutdown delay)
@@ -108,25 +127,37 @@ install-service:
 		echo "       Then copy it to ~/Library/LaunchAgents/com.claude-telegram-ts.plist"; \
 	elif [ "$(IS_WSL)" = "1" ]; then \
 		mkdir -p ~/.config/systemd/user; \
-		echo "[Unit]" > $(SYSTEMD_SERVICE); \
-		echo "Description=Claude Telegram Bot" >> $(SYSTEMD_SERVICE); \
-		echo "After=network.target" >> $(SYSTEMD_SERVICE); \
-		echo "" >> $(SYSTEMD_SERVICE); \
-		echo "[Service]" >> $(SYSTEMD_SERVICE); \
-		echo "Type=simple" >> $(SYSTEMD_SERVICE); \
-		echo "WorkingDirectory=$(shell pwd)" >> $(SYSTEMD_SERVICE); \
-		echo "ExecStart=$(shell which bun) run src/index.ts" >> $(SYSTEMD_SERVICE); \
-		echo "Restart=always" >> $(SYSTEMD_SERVICE); \
-		echo "RestartSec=10" >> $(SYSTEMD_SERVICE); \
-		echo "StandardOutput=append:/tmp/claude-telegram-bot.log" >> $(SYSTEMD_SERVICE); \
-		echo "StandardError=append:/tmp/claude-telegram-bot.err" >> $(SYSTEMD_SERVICE); \
-		echo "" >> $(SYSTEMD_SERVICE); \
-		echo "[Install]" >> $(SYSTEMD_SERVICE); \
-		echo "WantedBy=default.target" >> $(SYSTEMD_SERVICE); \
-		systemctl --user daemon-reload; \
-		systemctl --user enable $(SERVICE_NAME); \
-		echo "✅ WSL systemd service installed"; \
+		printf '[Unit]\nDescription=$(SERVICE_NAME)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\nExecStart=%s run start\nRestart=always\nRestartSec=10\nEnvironment=PATH=%s:/usr/local/bin:/usr/bin:/bin\nStandardOutput=append:$(LOGFILE)\nStandardError=append:$(ERRFILE)\n\n[Install]\nWantedBy=default.target\n' "$(shell pwd)" "$(BUN_PATH)" "$(dir $(BUN_PATH))" > $(SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		$(SYSTEMCTL) enable $(SERVICE_NAME); \
+		echo "✅ WSL systemd service installed ($(SERVICE_NAME))"; \
 		echo "   Start with: make start"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
+	fi
+
+# Reinstall service (uninstall + install + start)
+reinstall-service: uninstall-service install-service start
+	@echo "✅ Service reinstalled and started"
+
+# Uninstall service (complete removal)
+uninstall-service:
+	@echo "🗑️  Uninstalling service..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f $(MACOS_PLIST) ]; then \
+			launchctl unload $(MACOS_PLIST) 2>/dev/null || true; \
+			rm -f $(MACOS_PLIST); \
+			echo "✅ macOS service removed"; \
+		else \
+			echo "   Service not installed"; \
+		fi \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		$(SYSTEMCTL) stop $(SERVICE_NAME) 2>/dev/null || true; \
+		$(SYSTEMCTL) disable $(SERVICE_NAME) 2>/dev/null || true; \
+		$(SYSTEMCTL) unmask $(SERVICE_NAME) 2>/dev/null || true; \
+		rm -f $(SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		echo "✅ WSL systemd service removed"; \
 	else \
 		echo "⚠️  Unsupported platform"; \
 	fi
@@ -134,20 +165,25 @@ install-service:
 # View logs
 logs:
 	@echo "📋 Service logs:"
-	@tail -f /tmp/claude-telegram-bot.log
+	@tail -f $(LOGFILE)
 
 # View error logs
 errors:
 	@echo "❌ Error logs:"
-	@tail -f /tmp/claude-telegram-bot.err
+	@tail -f $(ERRFILE)
 
-# Service status
+# Service/process status
 status:
-	@echo "📊 Service status:"
-	@if [ "$(UNAME_S)" = "Darwin" ]; then \
-		launchctl list | grep com.claude-telegram-ts || echo "   Service not running"; \
-	elif [ "$(IS_WSL)" = "1" ]; then \
-		systemctl --user status $(SERVICE_NAME) --no-pager || echo "   Service not running"; \
+	@echo "📊 Status:"
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(MACOS_PLIST) ]; then \
+		launchctl list | grep com.claude-telegram-ts || echo "   macOS service not running"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-enabled $(SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) status $(SERVICE_NAME) --no-pager || echo "   systemd service not running"; \
+	elif [ -f $(PIDFILE) ] && kill -0 $$(cat $(PIDFILE)) 2>/dev/null; then \
+		PID=$$(cat $(PIDFILE)); \
+		echo "   Bot running (PID: $$PID, dev mode)"; \
+		ps -p $$PID -o pid,etime,rss,args --no-headers 2>/dev/null || true; \
 	else \
-		echo "⚠️  Unsupported platform"; \
+		rm -f $(PIDFILE) 2>/dev/null; \
+		echo "   Not running"; \
 	fi
