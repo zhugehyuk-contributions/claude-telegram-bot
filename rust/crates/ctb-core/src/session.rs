@@ -721,30 +721,20 @@ impl EventPipeline {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            if !file_path.is_empty() {
-                let is_tmp_or_claude_read = tool_name.eq_ignore_ascii_case("Read")
-                    && (file_path.contains("/.claude/")
-                        || self
-                            .cfg
-                            .temp_paths
-                            .iter()
-                            .any(|p| file_path.starts_with(&*p.to_string_lossy())));
-
-                if !is_tmp_or_claude_read && !self.paths.is_path_allowed(file_path) {
-                    let _ = self.model.cancel().await;
-                    let msg = format!("Access denied: {}", escape_html(file_path));
-                    let _ = self
-                        .stream
-                        .on_status(
-                            &self.cfg,
-                            self.messenger.as_ref(),
-                            StatusType::Tool,
-                            &msg,
-                            None,
-                        )
-                        .await;
-                    return Err(Error::Security(format!("File access blocked: {file_path}")));
-                }
+            if !file_path.is_empty() && !self.paths.is_path_allowed(file_path) {
+                let _ = self.model.cancel().await;
+                let msg = format!("Access denied: {}", escape_html(file_path));
+                let _ = self
+                    .stream
+                    .on_status(
+                        &self.cfg,
+                        self.messenger.as_ref(),
+                        StatusType::Tool,
+                        &msg,
+                        None,
+                    )
+                    .await;
+                return Err(Error::Security(format!("File access blocked: {file_path}")));
             }
         }
 
