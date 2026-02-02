@@ -567,46 +567,32 @@ export async function handleContext(ctx: Context): Promise<void> {
   }
 
   try {
-    const usage = session.lastUsage;
-
-    if (!usage) {
-      await ctx.reply("⚙️ No token usage data yet. Send a message first.");
-      return;
-    }
-
-    // Validate usage data structure
-    if (
-      typeof usage.input_tokens !== "number" ||
-      typeof usage.output_tokens !== "number"
-    ) {
-      console.error("[ERROR:CONTEXT_INVALID_DATA] Token usage data malformed:", usage);
-      await ctx.reply(
-        "⚠️ Token usage data is incomplete. Try sending a new message to refresh statistics."
-      );
-      return;
-    }
-
-    // Calculate current context window usage
-    // Note: 200K limit is INPUT context only (system + history + user input)
-    // Output tokens have separate limits and don't consume input context
+    // Use cumulative context from session (accurate even after restart/resume)
     const CONTEXT_LIMIT = 200_000;
-    const contextUsed = usage.input_tokens; // Only input counts toward context limit
+    const contextUsed = session.currentContextTokens; // totalInputTokens + totalOutputTokens
     const percentage = ((contextUsed / CONTEXT_LIMIT) * 100).toFixed(1);
 
     // Format numbers with commas for readability
     const formatNumber = (n: number): string => n.toLocaleString("en-US");
 
-    await ctx.reply(
-      `⚙️ <b>Context Window Usage</b>\n\n` +
-        `📊 <code>${formatNumber(contextUsed)} / ${formatNumber(CONTEXT_LIMIT)}</code> tokens (<b>${percentage}%</b>)\n\n` +
-        `Input: ${formatNumber(usage.input_tokens)} (context)\n` +
-        `Output: ${formatNumber(usage.output_tokens)} (generated)\n` +
+    // Get breakdown if lastUsage available
+    const usage = session.lastUsage;
+    const breakdown = usage
+      ? `\n\nLast query:\n` +
+        `Input: ${formatNumber(usage.input_tokens)}\n` +
+        `Output: ${formatNumber(usage.output_tokens)}\n` +
         (usage.cache_read_input_tokens
           ? `Cache read: ${formatNumber(usage.cache_read_input_tokens)}\n`
           : "") +
         (usage.cache_creation_input_tokens
-          ? `Cache created: ${formatNumber(usage.cache_creation_input_tokens)}\n`
-          : ""),
+          ? `Cache created: ${formatNumber(usage.cache_creation_input_tokens)}`
+          : "")
+      : "";
+
+    await ctx.reply(
+      `⚙️ <b>Context Window Usage</b>\n\n` +
+        `📊 <code>${formatNumber(contextUsed)} / ${formatNumber(CONTEXT_LIMIT)}</code> tokens (<b>${percentage}%</b>)` +
+        breakdown,
       { parse_mode: "HTML" }
     );
   } catch (error) {
