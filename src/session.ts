@@ -70,7 +70,10 @@ class ClaudeSession {
   totalQueries = 0;
 
   // Context limit tracking
-  contextLimitWarned = false; // Only warn once per session
+  contextLimitWarned = false; // Only warn once per session (90% threshold)
+  warned70 = false; // 70% threshold warning
+  warned85 = false; // 85% threshold warning
+  warned95 = false; // 95% threshold warning
   recentlyRestored = false; // Cooldown after /load
   messagesSinceRestore = 0; // Count messages since /load
 
@@ -105,6 +108,18 @@ class ClaudeSession {
     return this.contextLimitWarned && !this.recentlyRestored;
   }
 
+  get needsWarning70(): boolean {
+    return this.warned70 && !this.recentlyRestored;
+  }
+
+  get needsWarning85(): boolean {
+    return this.warned85 && !this.recentlyRestored;
+  }
+
+  get needsWarning95(): boolean {
+    return this.warned95 && !this.recentlyRestored;
+  }
+
   get isProcessing(): boolean {
     return this._isProcessing;
   }
@@ -135,6 +150,21 @@ class ClaudeSession {
    */
   clearStopRequested(): void {
     this.stopRequested = false;
+  }
+
+  /**
+   * Clear warning flags after displaying warnings (one-time notification).
+   */
+  clearWarning70(): void {
+    this.warned70 = false;
+  }
+
+  clearWarning85(): void {
+    this.warned85 = false;
+  }
+
+  clearWarning95(): void {
+    this.warned95 = false;
   }
 
   /**
@@ -532,6 +562,14 @@ class ClaudeSession {
     this.totalCacheCreateTokens = 0;
     this.totalQueries = 0;
 
+    // Reset warning flags
+    this.contextLimitWarned = false;
+    this.warned70 = false;
+    this.warned85 = false;
+    this.warned95 = false;
+    this.recentlyRestored = false;
+    this.messagesSinceRestore = 0;
+
     console.log("Session cleared");
   }
 
@@ -543,6 +581,9 @@ class ClaudeSession {
     this.recentlyRestored = true;
     this.messagesSinceRestore = 0;
     this.contextLimitWarned = false;
+    this.warned70 = false;
+    this.warned85 = false;
+    this.warned95 = false;
     console.log("Context restored - cooldown activated (50 messages)");
   }
 
@@ -575,7 +616,60 @@ class ClaudeSession {
         console.log("Cooldown period complete, re-enabling context limit monitoring");
         this.recentlyRestored = false;
         this.contextLimitWarned = false;
+        this.warned70 = false;
+        this.warned85 = false;
+        this.warned95 = false;
       }
+    }
+
+    // Multi-threshold warning system (70%, 85%, 95%)
+    const THRESHOLD_70 = 140_000;
+    const THRESHOLD_85 = 170_000;
+    const THRESHOLD_95 = 190_000;
+
+    if (currentContext >= THRESHOLD_70 && !this.warned70 && !this.recentlyRestored) {
+      this.warned70 = true;
+      const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
+      const tokensRemaining = CONTEXT_LIMIT - currentContext;
+      console.log(`[TELEMETRY] context_threshold_70`, {
+        sessionId: this.sessionId?.slice(0, 8),
+        currentContext,
+        threshold: THRESHOLD_70,
+        tokensRemaining,
+        percentage,
+        timestamp: new Date().toISOString(),
+      });
+      console.warn(`⚠️  Context: ${currentContext}/${CONTEXT_LIMIT} (${percentage}%) - 70% reached`);
+    }
+
+    if (currentContext >= THRESHOLD_85 && !this.warned85 && !this.recentlyRestored) {
+      this.warned85 = true;
+      const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
+      const tokensRemaining = CONTEXT_LIMIT - currentContext;
+      console.log(`[TELEMETRY] context_threshold_85`, {
+        sessionId: this.sessionId?.slice(0, 8),
+        currentContext,
+        threshold: THRESHOLD_85,
+        tokensRemaining,
+        percentage,
+        timestamp: new Date().toISOString(),
+      });
+      console.warn(`⚠️  Context: ${currentContext}/${CONTEXT_LIMIT} (${percentage}%) - 85% reached`);
+    }
+
+    if (currentContext >= THRESHOLD_95 && !this.warned95 && !this.recentlyRestored) {
+      this.warned95 = true;
+      const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
+      const tokensRemaining = CONTEXT_LIMIT - currentContext;
+      console.log(`[TELEMETRY] context_threshold_95`, {
+        sessionId: this.sessionId?.slice(0, 8),
+        currentContext,
+        threshold: THRESHOLD_95,
+        tokensRemaining,
+        percentage,
+        timestamp: new Date().toISOString(),
+      });
+      console.warn(`⚠️  Context: ${currentContext}/${CONTEXT_LIMIT} (${percentage}%) - 95% CRITICAL`);
     }
 
     // Check if we should trigger save (180k threshold)
@@ -610,9 +704,14 @@ class ClaudeSession {
         session_id: this.sessionId,
         saved_at: new Date().toISOString(),
         working_dir: WORKING_DIR,
+        // Save token counters for context tracking
+        totalInputTokens: this.totalInputTokens,
+        totalOutputTokens: this.totalOutputTokens,
+        totalQueries: this.totalQueries,
+        sessionStartTime: this.sessionStartTime?.toISOString(),
       };
       Bun.write(SESSION_FILE, JSON.stringify(data));
-      console.log(`Session saved to ${SESSION_FILE}`);
+      console.log(`Session saved to ${SESSION_FILE} (context: ${this.totalInputTokens + this.totalOutputTokens} tokens)`);
     } catch (error) {
       console.warn(`Failed to save session: ${error}`);
     }
@@ -641,8 +740,16 @@ class ClaudeSession {
 
       this.sessionId = data.session_id;
       this.lastActivity = new Date();
+
+      // Restore token counters for context tracking (backward compatible)
+      this.totalInputTokens = data.totalInputTokens || 0;
+      this.totalOutputTokens = data.totalOutputTokens || 0;
+      this.totalQueries = data.totalQueries || 0;
+      this.sessionStartTime = data.sessionStartTime ? new Date(data.sessionStartTime) : null;
+
+      const contextTokens = this.totalInputTokens + this.totalOutputTokens;
       console.log(
-        `Resumed session ${data.session_id.slice(0, 8)}... (saved at ${data.saved_at})`
+        `Resumed session ${data.session_id.slice(0, 8)}... (saved at ${data.saved_at}, context: ${contextTokens} tokens)`
       );
       return [
         true,

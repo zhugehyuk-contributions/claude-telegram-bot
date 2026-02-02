@@ -23,6 +23,11 @@ export interface SessionData {
   session_id: string;
   saved_at: string;
   working_dir: string;
+  // Token tracking (for context window usage)
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalQueries?: number;
+  sessionStartTime?: string;
 }
 
 // Token usage from Claude
