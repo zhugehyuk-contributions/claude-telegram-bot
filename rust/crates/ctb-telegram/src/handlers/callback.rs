@@ -181,7 +181,7 @@ pub async fn handle_callback(
         .await;
 
     // Audit log (best-effort).
-    let _ = match &result {
+    let audit_res = match &result {
         Ok(out) => state.audit.write(AuditEvent::message(
             user_id,
             &username,
@@ -196,6 +196,9 @@ pub async fn handle_callback(
             Some("callback"),
         )),
     };
+    if let Err(e) = audit_res {
+        eprintln!("[AUDIT] Failed to write callback audit event: {e}");
+    }
 
     if let Err(err) = result {
         if is_cancel_error(&err) {

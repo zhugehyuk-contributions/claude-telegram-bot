@@ -66,9 +66,12 @@ impl MediaGroupBuffer {
                 let (ok, retry_after) = rl.check(ctb_core::domain::UserId(user_id));
                 if !ok {
                     let retry = retry_after.unwrap_or_default().as_secs_f64();
-                    let _ = state
+                    if let Err(e) = state
                         .audit
-                        .write(AuditEvent::rate_limit(user_id, &username, retry));
+                        .write(AuditEvent::rate_limit(user_id, &username, retry))
+                    {
+                        eprintln!("[AUDIT] Failed to write rate_limit event: {e}");
+                    }
                     let _ = bot
                         .send_message(
                             teloxide::types::ChatId(chat_id),

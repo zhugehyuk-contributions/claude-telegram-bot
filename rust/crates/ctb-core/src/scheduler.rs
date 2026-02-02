@@ -426,7 +426,12 @@ impl CronScheduler {
                         "🕐 <b>Scheduled: {safe_name}</b>\n\n{}",
                         escape_html(&snippet)
                     );
-                    let _ = self.inner.messenger.send_html(chat_id, &msg).await;
+                    if let Err(e) = self.inner.messenger.send_html(chat_id, &msg).await {
+                        eprintln!(
+                            "[CRON] Failed to send completion notification for {}: {e}",
+                            schedule.name
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -441,7 +446,12 @@ impl CronScheduler {
                         "❌ <b>Scheduled job failed: {safe_name}</b>\n\n{}",
                         escape_html(&err_txt)
                     );
-                    let _ = self.inner.messenger.send_html(chat_id, &msg).await;
+                    if let Err(send_e) = self.inner.messenger.send_html(chat_id, &msg).await {
+                        eprintln!(
+                            "[CRON] Failed to send failure notification for {}: {send_e}",
+                            schedule.name
+                        );
+                    }
                 }
             }
         }

@@ -191,9 +191,22 @@ impl StreamingState {
             return Ok(());
         }
 
-        let _ = api.edit_html(msg, &formatted).await;
-        self.last_content.insert(segment_id, formatted);
-        self.last_edit_times.insert(segment_id, now);
+        match api.edit_html(msg, &formatted).await {
+            Ok(()) => {
+                self.last_content.insert(segment_id, formatted);
+                self.last_edit_times.insert(segment_id, now);
+            }
+            Err(_) => {
+                // If the message was deleted or can no longer be edited, fall back to sending
+                // a new message so the stream continues rather than silently stalling.
+                let new_msg = api.send_html(self.chat_id, &formatted).await?;
+                self.text_messages.insert(segment_id, new_msg);
+                self.last_content.insert(segment_id, formatted);
+                self.last_edit_times.insert(segment_id, now);
+                let _ = api.delete_message(msg).await;
+                self.recreate_progress(api).await?;
+            }
+        }
         Ok(())
     }
 
@@ -229,8 +242,20 @@ impl StreamingState {
         }
 
         if formatted.len() <= cfg.telegram_message_limit {
-            let _ = api.edit_html(msg, &formatted).await;
-            self.last_content.insert(segment_id, formatted);
+            match api.edit_html(msg, &formatted).await {
+                Ok(()) => {
+                    self.last_content.insert(segment_id, formatted);
+                }
+                Err(_) => {
+                    // Same fallback as streaming edits: send a fresh message so the final output
+                    // is not lost.
+                    let new_msg = api.send_html(self.chat_id, &formatted).await?;
+                    self.text_messages.insert(segment_id, new_msg);
+                    self.last_content.insert(segment_id, formatted);
+                    let _ = api.delete_message(msg).await;
+                    self.recreate_progress(api).await?;
+                }
+            }
             return Ok(());
         }
 
@@ -242,7 +267,7 @@ impl StreamingState {
 
         for chunk in split_text(content, cfg.telegram_safe_limit) {
             let html = convert_markdown_to_html(&chunk);
-            let _ = api.send_html(self.chat_id, &html).await;
+            api.send_html(self.chat_id, &html).await?;
         }
 
         self.recreate_progress(api).await?;
@@ -321,7 +346,7 @@ fn split_text(s: &str, max_len: usize) -> Vec<String> {
     let mut cur = String::new();
 
     for ch in s.chars() {
-        if cur.len() >= max_len {
+        if !cur.is_empty() && cur.len().saturating_add(ch.len_utf8()) > max_len {
             out.push(cur);
             cur = String::new();
         }

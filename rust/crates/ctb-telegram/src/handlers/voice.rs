@@ -65,9 +65,12 @@ pub async fn handle_voice(bot: Bot, msg: Message, state: Arc<AppState>) -> Respo
         let (ok, retry_after) = rl.check(ctb_core::domain::UserId(user_id));
         if !ok {
             let retry = retry_after.unwrap_or_default().as_secs_f64();
-            let _ = state
+            if let Err(e) = state
                 .audit
-                .write(AuditEvent::rate_limit(user_id, &username, retry));
+                .write(AuditEvent::rate_limit(user_id, &username, retry))
+            {
+                eprintln!("[AUDIT] Failed to write rate_limit event: {e}");
+            }
             let _ = bot
                 .send_message(
                     teloxide::types::ChatId(chat_id),
@@ -99,31 +102,38 @@ pub async fn handle_voice(bot: Bot, msg: Message, state: Arc<AppState>) -> Respo
         }
     };
 
-    let transcript = match state
-        .cfg
-        .openai_api_key
-        .as_ref()
-        .map(|k| OpenAiClient::new(k.clone()))
-    {
-        Some(client) => client
-            .transcribe_file(&voice_path, Some(&state.cfg.transcription_prompt))
-            .await
-            .ok(),
-        None => None,
-    };
-
-    let Some(transcript) = transcript else {
-        if let Some(st) = &status {
-            let _ = bot
-                .edit_message_text(st.chat.id, st.id, "❌ Transcription failed.")
-                .await;
-        } else {
-            let _ = bot
-                .send_message(teloxide::types::ChatId(chat_id), "❌ Transcription failed.")
-                .await;
-        }
+    let Some(k) = state.cfg.openai_api_key.as_ref() else {
+        let _ = bot
+            .send_message(
+                teloxide::types::ChatId(chat_id),
+                "Voice transcription is not configured. Set OPENAI_API_KEY in .env",
+            )
+            .await;
         let _ = tokio::fs::remove_file(&voice_path).await;
         return Ok(());
+    };
+
+    let client = OpenAiClient::new(k.clone());
+    let transcript = match client
+        .transcribe_file(&voice_path, Some(&state.cfg.transcription_prompt))
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!(
+                "❌ Transcription failed: {}",
+                e.to_string().chars().take(400).collect::<String>()
+            );
+            if let Some(st) = &status {
+                let _ = bot.edit_message_text(st.chat.id, st.id, msg).await;
+            } else {
+                let _ = bot
+                    .send_message(teloxide::types::ChatId(chat_id), msg)
+                    .await;
+            }
+            let _ = tokio::fs::remove_file(&voice_path).await;
+            return Ok(());
+        }
     };
 
     // Show transcript.

@@ -46,54 +46,87 @@ pub type McpServers = HashMap<String, McpServerConfig>;
 ///
 /// If the file does not exist, returns an empty map.
 pub fn load_mcp_servers(path: &Path) -> Result<McpServers> {
+    load_mcp_servers_with_overrides(path, &HashMap::new())
+}
+
+/// Load MCP servers from a JSON file and interpolate `${ENV_VAR}` placeholders, with optional
+/// override values (used to inject process-stable context without mutating global process env).
+///
+/// If the file does not exist, returns an empty map.
+pub fn load_mcp_servers_with_overrides(
+    path: &Path,
+    overrides: &HashMap<String, String>,
+) -> Result<McpServers> {
     if !path.exists() {
         return Ok(HashMap::new());
     }
 
     let raw = std::fs::read_to_string(path)?;
     let value: serde_json::Value = serde_json::from_str(&raw)?;
-    let interpolated = interpolate_env(value);
+    let interpolated = interpolate_env(value, overrides);
     let servers: McpServers = serde_json::from_value(interpolated)?;
     Ok(servers)
 }
 
 /// Recursively interpolate `${VAR}` placeholders in all JSON strings.
-fn interpolate_env(v: serde_json::Value) -> serde_json::Value {
+fn interpolate_env(v: serde_json::Value, overrides: &HashMap<String, String>) -> serde_json::Value {
     match v {
-        serde_json::Value::String(s) => serde_json::Value::String(interpolate_env_str(&s)),
-        serde_json::Value::Array(xs) => {
-            serde_json::Value::Array(xs.into_iter().map(interpolate_env).collect())
+        serde_json::Value::String(s) => {
+            serde_json::Value::String(interpolate_env_str(&s, overrides))
         }
+        serde_json::Value::Array(xs) => serde_json::Value::Array(
+            xs.into_iter()
+                .map(|x| interpolate_env(x, overrides))
+                .collect(),
+        ),
         serde_json::Value::Object(map) => serde_json::Value::Object(
             map.into_iter()
-                .map(|(k, v)| (k, interpolate_env(v)))
+                .map(|(k, v)| (k, interpolate_env(v, overrides)))
                 .collect(),
         ),
         other => other,
     }
 }
 
-fn interpolate_env_str(s: &str) -> String {
+fn interpolate_env_str(s: &str, overrides: &HashMap<String, String>) -> String {
     // Minimal `${VAR}` expansion (no defaults). Unset vars become empty string.
-    let mut out = String::new();
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
 
-    while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(end) = s[i + 2..].find('}') {
-                let name = &s[i + 2..i + 2 + end];
-                let val = env::var(name).unwrap_or_default();
-                out.push_str(&val);
-                i = i + 2 + end + 1;
-                continue;
-            }
-        }
-        out.push(bytes[i] as char);
-        i += 1;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            // No closing '}' — treat literally.
+            out.push_str("${");
+            rest = after;
+            continue;
+        };
+
+        let name = &after[..end];
+        let val = resolve_env(name, overrides);
+        out.push_str(&val);
+        rest = &after[end + 1..];
     }
 
+    out.push_str(rest);
     out
+}
+
+fn resolve_env(name: &str, overrides: &HashMap<String, String>) -> String {
+    match env::var(name) {
+        Ok(v) => {
+            // If we have an override for this name, only use it when the env var is
+            // empty (parity with the previous CTB_REPO_ROOT "set if empty" behavior).
+            if overrides.contains_key(name) && v.trim().is_empty() {
+                overrides.get(name).cloned().unwrap_or_default()
+            } else {
+                v
+            }
+        }
+        Err(_) => overrides.get(name).cloned().unwrap_or_default(),
+    }
 }
 
 /// Convenience: write MCP servers to a temp file for passing to `claude --mcp-config`.
@@ -118,7 +151,10 @@ mod tests {
         env::set_var(&key, "abc123");
 
         let s = format!("https://x.test/?k=${{{key}}}");
-        assert_eq!(interpolate_env_str(&s), "https://x.test/?k=abc123");
+        assert_eq!(
+            interpolate_env_str(&s, &HashMap::new()),
+            "https://x.test/?k=abc123"
+        );
 
         match prev {
             Some(v) => env::set_var(&key, v),

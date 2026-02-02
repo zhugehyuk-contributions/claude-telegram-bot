@@ -67,9 +67,12 @@ pub async fn run_prompt(
         let (ok, retry_after) = rl.check(UserId(user_id));
         if !ok {
             let retry = retry_after.unwrap_or_default().as_secs_f64();
-            let _ = state
+            if let Err(e) = state
                 .audit
-                .write(AuditEvent::rate_limit(user_id, &username, retry));
+                .write(AuditEvent::rate_limit(user_id, &username, retry))
+            {
+                eprintln!("[AUDIT] Failed to write rate_limit event: {e}");
+            }
             let _ = bot
                 .send_message(
                     teloxide::types::ChatId(chat_id),
@@ -112,13 +115,15 @@ pub async fn run_prompt(
 
         match result {
             Ok(out) => {
-                let _ = state.audit.write(AuditEvent::message(
+                if let Err(e) = state.audit.write(AuditEvent::message(
                     user_id,
                     &username,
                     message_type,
                     &text,
                     Some(&out.text),
-                ));
+                )) {
+                    eprintln!("[AUDIT] Failed to write message event: {e}");
+                }
                 if !out.waiting_for_user {
                     let _ = state.scheduler.process_queued_jobs().await;
                 }
@@ -158,12 +163,14 @@ pub async fn run_prompt(
                         format!("❌ Error: {truncated}"),
                     )
                     .await;
-                let _ = state.audit.write(AuditEvent::error(
+                if let Err(e) = state.audit.write(AuditEvent::error(
                     user_id,
                     &username,
                     &truncated,
                     Some(message_type),
-                ));
+                )) {
+                    eprintln!("[AUDIT] Failed to write error event: {e}");
+                }
                 break;
             }
         }

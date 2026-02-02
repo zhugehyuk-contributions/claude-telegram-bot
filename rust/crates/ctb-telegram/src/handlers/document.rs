@@ -317,9 +317,12 @@ pub async fn handle_document(bot: Bot, msg: Message, state: Arc<AppState>) -> Re
         let (ok, retry_after) = rl.check(ctb_core::domain::UserId(user_id));
         if !ok {
             let retry = retry_after.unwrap_or_default().as_secs_f64();
-            let _ = state
+            if let Err(e) = state
                 .audit
-                .write(AuditEvent::rate_limit(user_id, &username, retry));
+                .write(AuditEvent::rate_limit(user_id, &username, retry))
+            {
+                eprintln!("[AUDIT] Failed to write rate_limit event: {e}");
+            }
             let _ = bot
                 .send_message(
                     teloxide::types::ChatId(chat_id),
@@ -467,9 +470,11 @@ pub async fn handle_document(bot: Bot, msg: Message, state: Arc<AppState>) -> Re
             let _ = bot.delete_message(st.chat.id, st.id).await;
         }
 
-        let _ = state.audit.write(AuditEvent::message(
+        if let Err(e) = state.audit.write(AuditEvent::message(
             user_id, &username, "ARCHIVE", &file_name, None,
-        ));
+        )) {
+            eprintln!("[AUDIT] Failed to write message event: {e}");
+        }
 
         return Ok(());
     }
@@ -513,9 +518,12 @@ pub async fn handle_document(bot: Bot, msg: Message, state: Arc<AppState>) -> Re
             let (ok, retry_after) = rl.check(ctb_core::domain::UserId(user_id));
             if !ok {
                 let retry = retry_after.unwrap_or_default().as_secs_f64();
-                let _ = state
+                if let Err(e) = state
                     .audit
-                    .write(AuditEvent::rate_limit(user_id, &username, retry));
+                    .write(AuditEvent::rate_limit(user_id, &username, retry))
+                {
+                    eprintln!("[AUDIT] Failed to write rate_limit event: {e}");
+                }
                 let _ = bot
                     .send_message(
                         teloxide::types::ChatId(chat_id),

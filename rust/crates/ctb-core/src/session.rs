@@ -420,21 +420,20 @@ fn prepare_mcp_config_for_chat(
     chat_id: crate::domain::ChatId,
 ) -> Result<Option<std::path::PathBuf>> {
     let repo_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // Provide a stable interpolation target for MCP configs (e.g. `${CTB_REPO_ROOT}/...`).
-    // We set it once and keep it stable for the lifetime of the process.
-    if std::env::var("CTB_REPO_ROOT")
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        std::env::set_var("CTB_REPO_ROOT", repo_root.to_string_lossy().to_string());
-    }
     let base = repo_root.join("mcp-config.json");
     if !base.exists() {
         return Ok(None);
     }
 
-    let mut servers = crate::mcp_config::load_mcp_servers(&base)?;
+    // Provide a stable interpolation target for MCP configs (e.g. `${CTB_REPO_ROOT}/...`) without
+    // mutating the global process environment (which is not thread-safe to write at runtime).
+    let mut overrides = std::collections::HashMap::new();
+    overrides.insert(
+        "CTB_REPO_ROOT".to_string(),
+        repo_root.to_string_lossy().to_string(),
+    );
+
+    let mut servers = crate::mcp_config::load_mcp_servers_with_overrides(&base, &overrides)?;
     if servers.is_empty() {
         return Ok(None);
     }
@@ -695,7 +694,11 @@ impl EventPipeline {
                 .unwrap_or("");
             let (ok, reason) = check_command_safety(cmd, &self.cfg.blocked_patterns, &self.paths);
             if !ok {
-                let _ = self.model.cancel().await;
+                if let Err(e) = self.model.cancel().await {
+                    return Err(Error::External(format!(
+                        "Failed to cancel run after blocking unsafe command: {e}"
+                    )));
+                }
                 let msg = format!("BLOCKED: {}", escape_html(&reason));
                 let _ = self
                     .stream
@@ -722,7 +725,11 @@ impl EventPipeline {
                 .unwrap_or("");
 
             if !file_path.is_empty() && !self.paths.is_path_allowed(file_path) {
-                let _ = self.model.cancel().await;
+                if let Err(e) = self.model.cancel().await {
+                    return Err(Error::External(format!(
+                        "Failed to cancel run after blocking file access: {e}"
+                    )));
+                }
                 let msg = format!("Access denied: {}", escape_html(file_path));
                 let _ = self
                     .stream
@@ -761,12 +768,24 @@ impl EventPipeline {
 
             // Give MCP server a moment to write the request file, then retry a few times.
             tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut last_err: Option<Error> = None;
             for attempt in 0..3 {
-                if check_pending_ask_user_requests(&*self.messenger, &self.cfg, self.stream.chat_id)
-                    .await?
+                match check_pending_ask_user_requests(
+                    &*self.messenger,
+                    &self.cfg,
+                    self.stream.chat_id,
+                )
+                .await
                 {
-                    self.ask_user_buttons_sent = true;
-                    break;
+                    Ok(true) => {
+                        self.ask_user_buttons_sent = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        last_err = Some(e);
+                        break;
+                    }
                 }
                 if attempt < 2 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -774,7 +793,21 @@ impl EventPipeline {
             }
 
             // Stop the current run so the bot can wait for the user's callback response.
-            let _ = self.model.cancel().await;
+            if let Err(e) = self.model.cancel().await {
+                if let Some(prev) = last_err {
+                    return Err(Error::External(format!(
+                        "Failed to cancel run after ask_user trigger: {e} (ask_user file handling error: {prev})"
+                    )));
+                }
+                return Err(Error::External(format!(
+                    "Failed to cancel run after ask_user trigger: {e}"
+                )));
+            }
+
+            if let Some(e) = last_err {
+                return Err(e);
+            }
+
             return Ok(());
         }
 
@@ -920,13 +953,13 @@ async fn check_pending_ask_user_requests(
 
         let keyboard =
             InlineKeyboard::one_per_row(request_id, &options, cfg.button_label_max_length);
-        let _ = messenger
+        messenger
             .send_inline_keyboard(chat_id, &format!("❓ {}", escape_html(question)), keyboard)
             .await?;
 
         // Mark as sent.
         v["status"] = serde_json::Value::String("sent".to_string());
-        let _ = std::fs::write(&path, serde_json::to_string(&v)?);
+        std::fs::write(&path, serde_json::to_string(&v)?)?;
         any_sent = true;
     }
 
