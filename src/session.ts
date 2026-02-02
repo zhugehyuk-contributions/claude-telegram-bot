@@ -694,6 +694,9 @@ class ClaudeSession {
           `(${percentage}%) - SAVE REQUIRED`
       );
     }
+
+    // Save session after every usage update to persist token counters
+    this.saveSession();
   }
 
   private saveSession(): void {
