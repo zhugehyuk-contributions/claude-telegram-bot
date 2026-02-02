@@ -6,6 +6,8 @@ use async_trait::async_trait;
 
 use std::process::Stdio;
 
+use std::collections::VecDeque;
+
 use ctb_core::{
     errors::Error,
     model::{
@@ -25,11 +27,40 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+const STDERR_TAIL_MAX_BYTES: usize = 16 * 1024;
+const STDERR_TAIL_MAX_LINES: usize = 200;
+
 #[derive(Clone, Debug)]
 pub struct ClaudeCliClient {
     cfg: ClaudeCliConfig,
     child: std::sync::Arc<Mutex<Option<tokio::process::Child>>>,
     cancel: std::sync::Arc<Mutex<Option<CancellationToken>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StderrTail {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+impl StderrTail {
+    fn push_line(&mut self, line: String) {
+        // +1 for the '\n' we join with later.
+        self.bytes = self.bytes.saturating_add(line.len() + 1);
+        self.lines.push_back(line);
+
+        while self.lines.len() > STDERR_TAIL_MAX_LINES || self.bytes > STDERR_TAIL_MAX_BYTES {
+            if let Some(front) = self.lines.pop_front() {
+                self.bytes = self.bytes.saturating_sub(front.len() + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn snapshot(&self) -> String {
+        self.lines.iter().cloned().collect::<Vec<_>>().join("\n")
+    }
 }
 
 impl ClaudeCliClient {
@@ -40,6 +71,11 @@ impl ClaudeCliClient {
             cancel: std::sync::Arc::new(Mutex::new(None)),
         }
     }
+}
+
+async fn clear_cancel_token(cancel: &std::sync::Arc<Mutex<Option<CancellationToken>>>) {
+    let mut guard = cancel.lock().await;
+    *guard = None;
 }
 
 #[async_trait]
@@ -63,8 +99,9 @@ impl ModelClient for ClaudeCliClient {
         req: RunRequest,
         on_event: &mut (dyn FnMut(ModelEvent) -> Result<()> + Send),
     ) -> Result<RunResult> {
-        // Cancel any existing run first (best-effort).
-        let _ = self.cancel().await;
+        // Cancel any existing run first. If we can't kill/reap it, fail fast rather than
+        // spawning a second long-running CLI process.
+        self.cancel().await?;
 
         let token = CancellationToken::new();
         {
@@ -94,6 +131,8 @@ impl ModelClient for ClaudeCliClient {
             .take()
             .ok_or_else(|| Error::External("claude stdout was not captured".to_string()))?;
         let stderr = child.stderr.take();
+        let stderr_tail: std::sync::Arc<Mutex<StderrTail>> =
+            std::sync::Arc::new(Mutex::new(StderrTail::default()));
 
         // Store child so `cancel()` can kill it.
         {
@@ -103,10 +142,11 @@ impl ModelClient for ClaudeCliClient {
 
         // Drain stderr in background to avoid blocking on a full pipe.
         if let Some(stderr) = stderr {
+            let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut r = BufReader::new(stderr).lines();
-                while let Ok(Some(_line)) = r.next_line().await {
-                    // Intentionally drop; caller can enable debug logging in the adapter later.
+                while let Ok(Some(line)) = r.next_line().await {
+                    tail.lock().await.push_line(line);
                 }
             });
         }
@@ -120,16 +160,42 @@ impl ModelClient for ClaudeCliClient {
         loop {
             tokio::select! {
               _ = token.cancelled() => {
-                let _ = self.kill_child().await;
+                if let Err(e) = self.kill_child().await {
+                  return Err(Error::External(format!("Cancelled (failed to kill claude process: {e})")));
+                }
                 return Err(Error::External("Cancelled".to_string()));
               }
               line = reader.next_line() => {
-                let line = line?;
+                let line = match line {
+                  Ok(v) => v,
+                  Err(e) => {
+                    let kill = self.kill_child().await;
+                    if let Err(kill_e) = kill {
+                      return Err(Error::External(format!("claude stdout read failed: {e} (also failed to kill claude process: {kill_e})")));
+                    }
+                    return Err(Error::Io(e));
+                  }
+                };
                 let Some(line) = line else { break; };
 
                 let value: serde_json::Value = match serde_json::from_str(&line) {
                   Ok(v) => v,
-                  Err(_) => serde_json::json!({"type":"unknown_line","line":line}),
+                  Err(e) => {
+                    let stderr = stderr_tail.lock().await.snapshot();
+                    let line_preview = truncate_text(&line, 500);
+                    let kill = self.kill_child().await;
+                    let mut msg = format!(
+                      "claude stream-json parse failed: {e}\nstdout line: {line_preview}"
+                    );
+                    if !stderr.trim().is_empty() {
+                      msg.push_str("\nstderr (tail):\n");
+                      msg.push_str(&stderr);
+                    }
+                    if let Err(kill_e) = kill {
+                      msg.push_str(&format!("\nfailed to kill claude process: {kill_e}"));
+                    }
+                    return Err(Error::External(msg));
+                  }
                 };
 
                 // Extract session id opportunistically.
@@ -154,7 +220,9 @@ impl ModelClient for ClaudeCliClient {
 
                 let ev = classify_event(value);
                 if let Err(e) = on_event(ev) {
-                  let _ = self.kill_child().await;
+                  if let Err(kill_e) = self.kill_child().await {
+                    return Err(Error::External(format!("{e} (also failed to kill claude process: {kill_e})")));
+                  }
                   return Err(e);
                 }
               }
@@ -168,17 +236,24 @@ impl ModelClient for ClaudeCliClient {
                 child.wait().await?
             } else {
                 // Process already removed (cancelled).
+                // Avoid returning a confusing error if the caller requested cancellation.
+                if token.is_cancelled() {
+                    return Err(Error::External("Cancelled".to_string()));
+                }
                 return Err(Error::External("claude process missing".to_string()));
             }
         };
 
         // Clear cancellation token.
-        {
-            let mut guard = self.cancel.lock().await;
-            *guard = None;
-        }
+        clear_cancel_token(&self.cancel).await;
 
         if !status.success() && final_text.is_none() {
+            let stderr = stderr_tail.lock().await.snapshot();
+            if !stderr.trim().is_empty() {
+                return Err(Error::External(format!(
+                    "claude exited with status {status}\nstderr (tail):\n{stderr}"
+                )));
+            }
             return Err(Error::External(format!(
                 "claude exited with status {status}"
             )));
@@ -204,11 +279,38 @@ impl ModelClient for ClaudeCliClient {
 
 impl ClaudeCliClient {
     async fn kill_child(&self) -> Result<()> {
-        let mut guard = self.child.lock().await;
-        if let Some(child) = guard.as_mut() {
-            let _ = child.kill().await;
+        clear_cancel_token(&self.cancel).await;
+
+        let child = {
+            let mut guard = self.child.lock().await;
+            guard.take()
+        };
+
+        let Some(mut child) = child else {
+            return Ok(());
+        };
+
+        // If it's already exited, `try_wait` reaps it.
+        if child.try_wait()?.is_some() {
+            return Ok(());
         }
-        *guard = None;
+
+        // Best-effort kill + reap. If kill fails and the process is still alive, keep
+        // the handle so callers can retry instead of losing track of the child.
+        match child.kill().await {
+            Ok(()) => {
+                let _ = child.wait().await?;
+            }
+            Err(e) => {
+                // If it exited between `try_wait` and `kill`, `wait` will reap it.
+                if child.try_wait()?.is_none() {
+                    let mut guard = self.child.lock().await;
+                    *guard = Some(child);
+                    return Err(Error::Io(e));
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -231,4 +333,13 @@ fn parse_usage(v: &serde_json::Value) -> Option<TokenUsage> {
         cache_read_input_tokens: get("cache_read_input_tokens"),
         cache_creation_input_tokens: get("cache_creation_input_tokens"),
     })
+}
+
+fn truncate_text(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let mut out = s.chars().take(max_len).collect::<String>();
+    out.push_str("...");
+    out
 }
