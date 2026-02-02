@@ -249,7 +249,7 @@ async function processArchive(
       : `Please analyze this archive (${fileName}):\n\nFile tree (${tree.length} files):\n${treeStr}\n\nExtracted contents:\n${contentsStr}`;
 
     // Create streaming callback
-    const statusCallback = createStatusCallback(ctx, state);
+    const statusCallback = await createStatusCallback(ctx, state);
 
     const response = await session.sendMessageStreaming(
       addTimestamp(prompt),
@@ -328,7 +328,7 @@ async function processDocuments(
 
   // Create streaming state
   const state = new StreamingState();
-  const statusCallback = createStatusCallback(ctx, state);
+  const statusCallback = await createStatusCallback(ctx, state);
 
   try {
     const response = await session.sendMessageStreaming(

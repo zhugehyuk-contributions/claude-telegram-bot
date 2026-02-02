@@ -8,6 +8,7 @@
     "dev": "bun --watch run src/index.ts",
     "typecheck": "bun run --bun tsc --noEmit",
     "lint": "eslint src --ext .ts",
+    "lint:check": "eslint src --ext .ts",
     "fmt": "prettier --write \"src/**/*.ts\"",
     "test": "bun test"
   },
@@ -24,6 +25,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.76",
     "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/transformer-throttler": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "croner": "^9.1.0",
     "grammy": "^1.38.4",

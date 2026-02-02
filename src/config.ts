@@ -188,6 +188,22 @@ export const DELETE_THINKING_MESSAGES =
 export const DELETE_TOOL_MESSAGES =
   (process.env.DEFAULT_DELETE_TOOL_MESSAGES || "true").toLowerCase() === "true";
 
+// ============== Progress Display Configuration ==============
+
+// Progress spinner during work (default: OFF to avoid rate limits)
+export const PROGRESS_SPINNER_ENABLED =
+  (process.env.PROGRESS_SPINNER_ENABLED || "false").toLowerCase() === "true";
+
+// Show elapsed time on completion (default: ON)
+export const SHOW_ELAPSED_TIME =
+  (process.env.SHOW_ELAPSED_TIME || "true").toLowerCase() === "true";
+
+// Use reactions on user message to show progress (default: ON)
+// 👀 → 🔥 (working) → ✅ (done)
+// Much lower rate limit impact than messages
+export const PROGRESS_REACTION_ENABLED =
+  (process.env.PROGRESS_REACTION_ENABLED || "true").toLowerCase() === "true";
+
 // ============== Media Group Settings ==============
 
 export const MEDIA_GROUP_TIMEOUT = 1000; // ms to wait for more photos in a group

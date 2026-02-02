@@ -4,10 +4,20 @@
  * Control Claude Code from your phone via Telegram.
  */
 
-import { Bot } from "grammy";
+import { Bot, GrammyError } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
+import { apiThrottler } from "@grammyjs/transformer-throttler";
+import Bottleneck from "bottleneck";
 import { TELEGRAM_TOKEN, WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "./config";
-import { unlinkSync, readFileSync, existsSync, readdirSync, statSync } from "fs";
+import {
+  unlinkSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+} from "fs";
 import {
   handleStart,
   handleNew,
@@ -30,6 +40,46 @@ import { escapeHtml } from "./formatting";
 
 // Create bot instance
 const bot = new Bot(TELEGRAM_TOKEN);
+
+// Configure rate limiting for outbound Telegram API calls
+const throttler = apiThrottler({
+  global: {
+    maxConcurrent: 25,
+    minTime: 40, // ~25/sec (under 30/sec limit)
+  },
+  group: {
+    maxConcurrent: 1,
+    minTime: 3100, // ~19/min (under 20/min limit)
+    reservoir: 19,
+    reservoirRefreshAmount: 19,
+    reservoirRefreshInterval: 60000,
+    highWater: 50,
+    strategy: Bottleneck.strategy.OVERFLOW,
+  },
+  out: {
+    maxConcurrent: 1,
+    minTime: 1050, // ~57/min per chat (under 1/sec limit)
+    highWater: 100,
+    strategy: Bottleneck.strategy.OVERFLOW,
+  },
+});
+
+bot.api.config.use(throttler);
+
+// 429 fallback handler (if throttler fails to prevent rate limit)
+bot.api.config.use(async (prev, method, payload, signal) => {
+  try {
+    return await prev(method, payload, signal);
+  } catch (err) {
+    if (err instanceof GrammyError && err.error_code === 429) {
+      const retry = err.parameters?.retry_after ?? 30;
+      console.warn(`⚠️ 429 rate limit despite throttle. Waiting ${retry}s`);
+      await new Promise((r) => setTimeout(r, retry * 1000));
+      return prev(method, payload, signal);
+    }
+    throw err;
+  }
+});
 
 // Sequentialize non-command messages per user (prevents race conditions)
 // Commands bypass sequentialization so they work immediately
@@ -142,7 +192,85 @@ if (ALLOWED_USERS.length > 0) {
     try {
       const statusCallback = async () => {};
 
-      // Check for saved restart context
+      // PRIORITY 1: Check for .last-save-id (auto-load mechanism)
+      const saveIdFile = `${WORKING_DIR}/.last-save-id`;
+      if (existsSync(saveIdFile)) {
+        try {
+          const saveId = readFileSync(saveIdFile, "utf-8").trim();
+
+          // S1 FIX: Validate save ID format (security - path traversal/command injection)
+          if (!/^\d{8}_\d{6}$/.test(saveId)) {
+            console.error(`Invalid save ID format in .last-save-id: ${saveId}`);
+            unlinkSync(saveIdFile); // Remove malicious file
+            throw new Error(`Invalid save ID format: ${saveId}`);
+          }
+
+          console.log(`📥 Found .last-save-id: ${saveId} - Triggering auto-load`);
+
+          // Send /load command to Claude
+          await bot.api.sendMessage(
+            ALLOWED_USERS[0]!,
+            `🔄 **Auto-restoring context**\n\nSave ID: \`${saveId}\`\n\nExecuting /load...`,
+            { parse_mode: "Markdown" }
+          );
+
+          const loadResponse = await session.sendMessageStreaming(
+            `Skill tool with skill='oh-my-claude:load' and args='${saveId}'`,
+            "startup",
+            userId,
+            statusCallback
+          );
+
+          // C4 FIX: Validate /load succeeded
+          if (!loadResponse.includes("Loaded Context:")) {
+            console.error(`/load failed - response doesn't contain "Loaded Context:"`);
+            console.error(`Response: ${loadResponse.slice(0, 500)}`);
+            throw new Error(`/load validation failed for save ID: ${saveId}`);
+          }
+
+          console.log(`✅ Context restored from ${saveId}`);
+
+          // ORACLE: Add telemetry
+          console.log("[TELEMETRY] auto_load_success", {
+            saveId,
+            timestamp: new Date().toISOString(),
+          });
+
+          session.markRestored(); // Activate cooldown
+
+          // C3 FIX: Delete .last-save-id AFTER verification
+          unlinkSync(saveIdFile);
+
+          await bot.api.sendMessage(
+            ALLOWED_USERS[0]!,
+            `✅ **Context Restored**\n\nResumed from save: \`${saveId}\``,
+            { parse_mode: "Markdown" }
+          );
+
+          return; // Skip normal startup message
+        } catch (err) {
+          console.error("CRITICAL: Auto-load failed:", err);
+          console.error("Stack:", err instanceof Error ? err.stack : "N/A");
+
+          // S2 FIX: Sanitize error message (don't expose internal paths)
+          const errorStr = String(err);
+          const sanitized = errorStr.replace(
+            process.env.HOME || "/home/zhugehyuk",
+            "~"
+          );
+
+          await bot.api.sendMessage(
+            ALLOWED_USERS[0]!,
+            `🚨 **Auto-load Failed**\n\n` +
+              `Error: ${sanitized.slice(0, 300)}\n\n` +
+              `⚠️ Starting fresh session. Check logs for recovery.`,
+            { parse_mode: "Markdown" }
+          );
+          // Fall through to normal startup
+        }
+      }
+
+      // PRIORITY 2: Check for saved restart context (manual save-and-restart.sh)
       let contextMessage = "";
       const saveDir = `${WORKING_DIR}/docs/tasks/save`;
       if (existsSync(saveDir)) {
@@ -166,9 +294,19 @@ if (ALLOWED_USERS.length > 0) {
         }
       }
 
+      // Determine startup type for clear messaging
+      let startupType = "";
+      if (contextMessage.includes("restart-context")) {
+        startupType = "🔄 **SIGTERM Restart** (graceful shutdown via make up)";
+      } else if (resumed) {
+        startupType = "♻️ **Session Resumed** (no saved context found)";
+      } else {
+        startupType = "🆕 **Fresh Start** (new session)";
+      }
+
       const startupPrompt = resumed
-        ? `봇이 재시작되었고 이전 세션이 복원되었습니다. 현재 시간과 함께 간단히 알려주세요. (세션 ID: ${session.sessionId?.slice(0, 8)}...)${contextMessage}`
-        : `봇이 방금 재시작되었습니다. 새 세션이 시작됩니다. 현재 시간과 함께 간단한 인사말을 써주세요.${contextMessage}`;
+        ? `${startupType}\n\nBot restarted. Session ID: ${session.sessionId?.slice(0, 8)}...\n\n현재 시간과 함께 간단히 상태를 알려주세요.${contextMessage}`
+        : `${startupType}\n\nBot restarted. New session starting.\n\n현재 시간과 함께 간단한 인사말을 써주세요.${contextMessage}`;
 
       const response = await session.sendMessageStreaming(
         startupPrompt,
@@ -196,6 +334,43 @@ const stopRunner = () => {
   }
 };
 
+/**
+ * Save graceful shutdown context to be restored on next startup.
+ */
+function saveShutdownContext(): void {
+  try {
+    const saveDir = `${WORKING_DIR}/docs/tasks/save`;
+    mkdirSync(saveDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
+    const saveFile = `${saveDir}/restart-context-${timestamp}.md`;
+
+    const now = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+    const sessionInfo =
+      session.isActive && session.sessionId
+        ? `Session ID: ${session.sessionId.slice(0, 8)}...`
+        : "Session ID: none";
+
+    const content = [
+      `# Restart Context - ${now}`,
+      ``,
+      `## Message from Previous Session`,
+      ``,
+      `Gracefully shut down via make up. Session will be restored automatically.`,
+      ``,
+      sessionInfo,
+      ``,
+      `---`,
+      `*Auto-generated by SIGTERM handler*`,
+    ].join("\n");
+
+    writeFileSync(saveFile, content, "utf-8");
+    console.log(`✅ Context saved to ${saveFile}`);
+  } catch (error) {
+    console.warn(`Failed to save shutdown context: ${error}`);
+  }
+}
+
 process.on("SIGINT", () => {
   console.log("Received SIGINT");
   stopRunner();
@@ -204,6 +379,7 @@ process.on("SIGINT", () => {
 
 process.on("SIGTERM", () => {
   console.log("Received SIGTERM");
+  saveShutdownContext();
   stopRunner();
   process.exit(0);
 });

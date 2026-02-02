@@ -98,7 +98,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
     await ctx.api.editMessageText(chatId, statusMsg.message_id, `🎤 "${transcript}"`);
 
     // 9. Create streaming callback
-    const statusCallback = createStatusCallback(ctx, state);
+    const statusCallback = await createStatusCallback(ctx, state);
 
     // 10. Send to Claude (with timestamp)
     const claudeResponse = await session.sendMessageStreaming(

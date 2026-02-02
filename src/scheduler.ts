@@ -103,7 +103,9 @@ async function executeScheduledPrompt(schedule: CronSchedule): Promise<void> {
 
   if (cronExecutionLock || session.isRunning) {
     if (pendingCronJobs.length >= MAX_PENDING_QUEUE_SIZE) {
-      console.warn(`[CRON] Queue full (${MAX_PENDING_QUEUE_SIZE}), dropping oldest job`);
+      console.warn(
+        `[CRON] Queue full (${MAX_PENDING_QUEUE_SIZE}), dropping oldest job`
+      );
       pendingCronJobs.shift();
     }
     console.log(`[CRON] Session busy - queuing job: ${name}`);

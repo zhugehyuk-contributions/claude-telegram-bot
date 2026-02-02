@@ -69,11 +69,20 @@ class ClaudeSession {
   totalCacheCreateTokens = 0;
   totalQueries = 0;
 
+  // Context limit tracking
+  contextLimitWarned = false; // Only warn once per session
+  recentlyRestored = false; // Cooldown after /load
+  messagesSinceRestore = 0; // Count messages since /load
+
   private abortController: AbortController | null = null;
   private isQueryRunning = false;
   private stopRequested = false;
   private _isProcessing = false;
   private _wasInterruptedByNewMessage = false;
+
+  // Real-time steering buffer
+  private steeringBuffer: string[] = [];
+  private steeringMessageIds: number[] = [];
 
   get isActive(): boolean {
     return this.sessionId !== null;
@@ -81,6 +90,23 @@ class ClaudeSession {
 
   get isRunning(): boolean {
     return this.isQueryRunning || this._isProcessing;
+  }
+
+  /**
+   * Current cumulative context tokens (input + output) for this session.
+   *
+   * This is the same value used by accumulateUsage() to trigger context-limit warnings/auto-save.
+   */
+  get currentContextTokens(): number {
+    return this.totalInputTokens + this.totalOutputTokens;
+  }
+
+  get needsSave(): boolean {
+    return this.contextLimitWarned && !this.recentlyRestored;
+  }
+
+  get isProcessing(): boolean {
+    return this._isProcessing;
   }
 
   /**
@@ -112,6 +138,37 @@ class ClaudeSession {
   }
 
   /**
+   * Add a steering message to the buffer (user message sent during Claude execution).
+   */
+  addSteering(message: string, messageId?: number): void {
+    this.steeringBuffer.push(message);
+    if (messageId) {
+      this.steeringMessageIds.push(messageId);
+    }
+  }
+
+  /**
+   * Consume all buffered steering messages and return as combined string.
+   * Clears the buffer after consumption.
+   */
+  consumeSteering(): string | null {
+    if (this.steeringBuffer.length === 0) {
+      return null;
+    }
+    const combined = this.steeringBuffer.join("\n---\n");
+    this.steeringBuffer = [];
+    this.steeringMessageIds = [];
+    return combined;
+  }
+
+  /**
+   * Check if there are any buffered steering messages.
+   */
+  hasSteeringMessages(): boolean {
+    return this.steeringBuffer.length > 0;
+  }
+
+  /**
    * Mark processing as started.
    * Returns a cleanup function to call when done.
    */
@@ -119,6 +176,14 @@ class ClaudeSession {
     this._isProcessing = true;
     return () => {
       this._isProcessing = false;
+      // Clear any unconsumed steering messages
+      if (this.steeringBuffer.length > 0) {
+        console.log(
+          `[STEERING] Clearing ${this.steeringBuffer.length} unconsumed messages`
+        );
+        this.steeringBuffer = [];
+        this.steeringMessageIds = [];
+      }
     };
   }
 
@@ -197,6 +262,27 @@ class ClaudeSession {
       maxThinkingTokens: thinkingTokens,
       additionalDirectories: ALLOWED_PATHS,
       resume: this.sessionId || undefined,
+      // Real-time steering: inject buffered user messages before tool execution
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              async (input) => {
+                const steering = this.consumeSteering();
+                if (!steering) {
+                  return { continue: true };
+                }
+
+                console.log(`[STEERING] Injecting user message before tool execution`);
+                return {
+                  continue: true,
+                  systemMessage: `[USER SENT MESSAGE DURING EXECUTION]\n${steering}\n[END USER MESSAGE]`,
+                };
+              },
+            ],
+          },
+        ],
+      },
     };
 
     // Add Claude Code executable path if set (required for standalone builds)
@@ -449,6 +535,17 @@ class ClaudeSession {
     console.log("Session cleared");
   }
 
+  /**
+   * Mark that context was just restored (activate cooldown).
+   * Called after /load skill execution.
+   */
+  markRestored(): void {
+    this.recentlyRestored = true;
+    this.messagesSinceRestore = 0;
+    this.contextLimitWarned = false;
+    console.log("Context restored - cooldown activated (50 messages)");
+  }
+
   private accumulateUsage(u: TokenUsage): void {
     if (!this.sessionStartTime) this.sessionStartTime = new Date();
 
@@ -462,6 +559,47 @@ class ClaudeSession {
       `Usage: in=${u.input_tokens} out=${u.output_tokens} ` +
         `cache_read=${u.cache_read_input_tokens || 0} cache_create=${u.cache_creation_input_tokens || 0}`
     );
+
+    // Context limit monitoring (Oracle critical)
+    const CONTEXT_LIMIT = 200_000;
+    const SAVE_THRESHOLD = 180_000; // Trigger at 90% (20k buffer)
+    const COOLDOWN_MESSAGES = 50; // Don't re-trigger for 50 messages after /load
+
+    // ORACLE FIX: Use cumulative context, not per-message
+    const currentContext = this.totalInputTokens + this.totalOutputTokens;
+
+    // Increment message counter
+    if (this.recentlyRestored) {
+      this.messagesSinceRestore++;
+      if (this.messagesSinceRestore >= COOLDOWN_MESSAGES) {
+        console.log("Cooldown period complete, re-enabling context limit monitoring");
+        this.recentlyRestored = false;
+        this.contextLimitWarned = false;
+      }
+    }
+
+    // Check if we should trigger save (180k threshold)
+    if (
+      currentContext >= SAVE_THRESHOLD &&
+      !this.contextLimitWarned &&
+      !this.recentlyRestored
+    ) {
+      this.contextLimitWarned = true;
+      const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
+
+      // ORACLE: Add telemetry
+      console.log("[TELEMETRY] context_limit_approaching", {
+        currentContext,
+        threshold: SAVE_THRESHOLD,
+        percentage,
+        timestamp: new Date().toISOString(),
+      });
+
+      console.warn(
+        `⚠️  CONTEXT LIMIT APPROACHING: ${currentContext}/${CONTEXT_LIMIT} tokens ` +
+          `(${percentage}%) - SAVE REQUIRED`
+      );
+    }
   }
 
   private saveSession(): void {

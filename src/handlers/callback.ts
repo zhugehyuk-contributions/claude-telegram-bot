@@ -108,7 +108,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
 
   // Create streaming state
   const state = new StreamingState();
-  const statusCallback = createStatusCallback(ctx, state);
+  const statusCallback = await createStatusCallback(ctx, state);
 
   try {
     const response = await session.sendMessageStreaming(

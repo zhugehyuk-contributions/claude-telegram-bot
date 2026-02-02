@@ -16,6 +16,9 @@ import {
   BUTTON_LABEL_MAX_LENGTH,
   DELETE_THINKING_MESSAGES,
   DELETE_TOOL_MESSAGES,
+  PROGRESS_SPINNER_ENABLED,
+  SHOW_ELAPSED_TIME,
+  PROGRESS_REACTION_ENABLED,
 } from "../config";
 
 /**
@@ -93,6 +96,7 @@ export class StreamingState {
   progressMessage: Message | null = null; // progress spinner message
   progressTimer: Timer | null = null; // timer for updating progress
   startTime: Date | null = null; // work start time
+  rateLimitNotified = false; // whether we've already notified about rate limit
 
   cleanup() {
     if (this.progressTimer) {
@@ -100,6 +104,50 @@ export class StreamingState {
       this.progressTimer = null;
     }
   }
+}
+
+/**
+ * Check if error is a Telegram rate limit (429) and notify via reaction.
+ * Returns true if rate limited.
+ */
+export async function handleRateLimitError(
+  ctx: Context,
+  error: unknown,
+  state: StreamingState
+): Promise<boolean> {
+  const errorStr = String(error);
+  if (!errorStr.includes("429") && !errorStr.includes("Too Many Requests")) {
+    return false;
+  }
+
+  // Only notify once per request
+  if (state.rateLimitNotified) {
+    return true;
+  }
+
+  state.rateLimitNotified = true;
+
+  // Extract retry_after if available
+  let retryAfter = 60;
+  const match = errorStr.match(/retry after (\d+)/i);
+  if (match?.[1]) {
+    retryAfter = parseInt(match[1], 10);
+  }
+
+  // React to original message with yawn emoji (waiting/rate limited)
+  // Note: Telegram only allows specific emojis for reactions
+  const msgId = ctx.message?.message_id;
+  const chatId = ctx.chat?.id;
+  if (msgId !== undefined && chatId !== undefined) {
+    try {
+      await ctx.api.setMessageReaction(chatId, msgId, [{ type: "emoji", emoji: "🥱" }]);
+    } catch {
+      // Reaction also rate limited, ignore
+    }
+  }
+
+  console.warn(`[RATE LIMIT] Telegram 429 - retry after ${retryAfter}s`);
+  return true;
 }
 
 /**
@@ -120,10 +168,10 @@ function formatElapsed(startTime: Date): string {
 /**
  * Create a status callback for streaming updates.
  */
-export function createStatusCallback(
+export async function createStatusCallback(
   ctx: Context,
   state: StreamingState
-): StatusCallback {
+): Promise<StatusCallback> {
   let frameIndex = 0;
 
   // Helper to recreate progress message at bottom
@@ -154,40 +202,56 @@ export function createStatusCallback(
     }
   };
 
-  // Initialize progress tracking
+  // Initialize progress tracking (always track time, but spinner is optional)
   if (!state.startTime) {
     state.startTime = new Date();
 
-    // Create initial progress message (fire-and-forget with explicit error handling)
-    recreateProgressMessage().catch((error) => {
-      console.debug("Failed to create initial progress message:", error);
-    });
-
-    // Start update timer (1 second interval)
-    state.progressTimer = setInterval(async () => {
-      if (!state.startTime) return;
-
-      // Capture current reference to avoid race condition
-      const currentProgressMsg = state.progressMessage;
-      if (!currentProgressMsg) return;
-
-      frameIndex++;
-
-      // Update existing message (don't recreate on timer)
-      const spinner = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length];
-      const elapsed = formatElapsed(state.startTime);
-      const text = `${spinner} Working... (${elapsed})`;
-
-      try {
-        await ctx.api.editMessageText(
-          currentProgressMsg.chat.id,
-          currentProgressMsg.message_id,
-          text
-        );
-      } catch (error) {
-        console.debug("Failed to update progress message:", error);
+    // React with 🔥 on user message to show work started (replaces 👀)
+    if (PROGRESS_REACTION_ENABLED) {
+      const msgId = ctx.message?.message_id;
+      const chatId = ctx.chat?.id;
+      if (msgId !== undefined && chatId !== undefined) {
+        try {
+          await ctx.api.setMessageReaction(chatId, msgId, [
+            { type: "emoji", emoji: "🔥" },
+          ]);
+        } catch (error) {
+          console.debug("Failed to set working reaction:", error);
+        }
       }
-    }, 1000);
+    }
+
+    // Only show spinner if enabled (default: OFF to avoid rate limits)
+    if (PROGRESS_SPINNER_ENABLED) {
+      // Create initial progress message and WAIT for it to prevent race condition
+      await recreateProgressMessage();
+
+      // Start update timer AFTER message is created (1 second interval)
+      state.progressTimer = setInterval(async () => {
+        if (!state.startTime) return;
+
+        // Capture current reference to avoid race condition
+        const currentProgressMsg = state.progressMessage;
+        if (!currentProgressMsg) return;
+
+        frameIndex++;
+
+        // Update existing message (don't recreate on timer)
+        const spinner = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length];
+        const elapsed = formatElapsed(state.startTime);
+        const text = `${spinner} Working... (${elapsed})`;
+
+        try {
+          await ctx.api.editMessageText(
+            currentProgressMsg.chat.id,
+            currentProgressMsg.message_id,
+            text
+          );
+        } catch (error) {
+          console.debug("Failed to update progress message:", error);
+        }
+      }, 1000);
+    }
   }
 
   return async (statusType: string, content: string, segmentId?: number) => {
@@ -201,14 +265,18 @@ export function createStatusCallback(
         });
         state.thinkingMessages.push(thinkingMsg);
 
-        // Recreate progress at bottom after new message
-        await recreateProgressMessage();
+        // Recreate progress at bottom after new message (only if spinner enabled)
+        if (PROGRESS_SPINNER_ENABLED) {
+          await recreateProgressMessage();
+        }
       } else if (statusType === "tool") {
         const toolMsg = await ctx.reply(content, { parse_mode: "HTML" });
         state.toolMessages.push(toolMsg);
 
-        // Recreate progress at bottom after new message
-        await recreateProgressMessage();
+        // Recreate progress at bottom after new message (only if spinner enabled)
+        if (PROGRESS_SPINNER_ENABLED) {
+          await recreateProgressMessage();
+        }
       } else if (statusType === "text" && segmentId !== undefined) {
         const now = Date.now();
         const lastEdit = state.lastEditTimes.get(segmentId) || 0;
@@ -233,8 +301,10 @@ export function createStatusCallback(
           }
           state.lastEditTimes.set(segmentId, now);
 
-          // Recreate progress at bottom after new segment
-          await recreateProgressMessage();
+          // Recreate progress at bottom after new segment (only if spinner enabled)
+          if (PROGRESS_SPINNER_ENABLED) {
+            await recreateProgressMessage();
+          }
         } else if (now - lastEdit > STREAMING_THROTTLE_MS) {
           // Update existing segment message (throttled)
           const msg = state.textMessages.get(segmentId)!;
@@ -275,12 +345,17 @@ export function createStatusCallback(
           try {
             const msg = await ctx.reply(formatted, { parse_mode: "HTML" });
             state.textMessages.set(segmentId, msg);
+            state.lastContent.set(segmentId, formatted);
           } catch {
-            await ctx.reply(content);
+            const msg = await ctx.reply(content);
+            state.textMessages.set(segmentId, msg);
+            state.lastContent.set(segmentId, content);
           }
 
-          // Recreate progress at bottom after new message
-          await recreateProgressMessage();
+          // Recreate progress at bottom after new message (only if spinner enabled)
+          if (PROGRESS_SPINNER_ENABLED) {
+            await recreateProgressMessage();
+          }
           return;
         }
 
@@ -297,8 +372,18 @@ export function createStatusCallback(
             await ctx.api.editMessageText(msg.chat.id, msg.message_id, formatted, {
               parse_mode: "HTML",
             });
+            state.lastContent.set(segmentId, formatted);
           } catch (error) {
             console.debug("Failed to edit final message:", error);
+            try {
+              await ctx.api.editMessageText(msg.chat.id, msg.message_id, content);
+              state.lastContent.set(segmentId, content);
+            } catch (editError) {
+              console.debug(
+                "Failed to edit final message (plain text fallback):",
+                editError
+              );
+            }
           }
         } else {
           // Too long - delete and split
@@ -307,18 +392,34 @@ export function createStatusCallback(
           } catch (error) {
             console.debug("Failed to delete message for splitting:", error);
           }
+
+          // Replace the tracked message with the last chunk message so `done` can safely append
+          // the elapsed-time footer without targeting a deleted message.
+          state.textMessages.delete(segmentId);
+          state.lastContent.delete(segmentId);
+
+          let lastChunkMsg: Message | null = null;
+          let lastChunkContent: string | null = null;
           for (let i = 0; i < formatted.length; i += TELEGRAM_SAFE_LIMIT) {
             const chunk = formatted.slice(i, i + TELEGRAM_SAFE_LIMIT);
             try {
-              await ctx.reply(chunk, { parse_mode: "HTML" });
+              lastChunkMsg = await ctx.reply(chunk, { parse_mode: "HTML" });
+              lastChunkContent = chunk;
             } catch (htmlError) {
               console.debug("HTML chunk failed, using plain text:", htmlError);
-              await ctx.reply(chunk);
+              lastChunkMsg = await ctx.reply(chunk);
+              lastChunkContent = chunk;
             }
           }
+          if (lastChunkMsg && lastChunkContent !== null) {
+            state.textMessages.set(segmentId, lastChunkMsg);
+            state.lastContent.set(segmentId, lastChunkContent);
+          }
 
-          // Recreate progress at bottom after split messages
-          await recreateProgressMessage();
+          // Recreate progress at bottom after split messages (only if spinner enabled)
+          if (PROGRESS_SPINNER_ENABLED) {
+            await recreateProgressMessage();
+          }
         }
       } else if (statusType === "done") {
         // Stop progress timer
@@ -327,8 +428,20 @@ export function createStatusCallback(
           state.progressTimer = null;
         }
 
-        // Update progress message with completion info
-        if (state.progressMessage && state.startTime) {
+        // Delete progress message if exists
+        if (state.progressMessage) {
+          try {
+            await ctx.api.deleteMessage(
+              state.progressMessage.chat.id,
+              state.progressMessage.message_id
+            );
+          } catch (error) {
+            console.debug("Failed to delete progress message:", error);
+          }
+        }
+
+        // Append elapsed time to the last bot message
+        if (SHOW_ELAPSED_TIME && state.startTime && state.textMessages.size > 0) {
           const endTime = new Date();
           const duration = formatElapsed(state.startTime);
           const startStr = state.startTime.toLocaleTimeString("ko-KR", {
@@ -342,16 +455,25 @@ export function createStatusCallback(
             second: "2-digit",
           });
 
-          const completionText = `✅ Completed\n⏰ ${startStr} → ${endStr} (${duration})`;
+          const timeFooter = `\n\n<i>⏰ ${startStr} → ${endStr} (${duration})</i>`;
 
-          try {
-            await ctx.api.editMessageText(
-              state.progressMessage.chat.id,
-              state.progressMessage.message_id,
-              completionText
-            );
-          } catch (error) {
-            console.debug("Failed to update completion message:", error);
+          // Find the last segment message
+          const lastSegmentId = Math.max(...state.textMessages.keys());
+          const lastMsg = state.textMessages.get(lastSegmentId);
+          const lastContent = state.lastContent.get(lastSegmentId);
+
+          if (lastMsg && lastContent) {
+            const updatedContent = lastContent + timeFooter;
+            try {
+              await ctx.api.editMessageText(
+                lastMsg.chat.id,
+                lastMsg.message_id,
+                updatedContent,
+                { parse_mode: "HTML" }
+              );
+            } catch (error) {
+              console.debug("Failed to append time footer to last message:", error);
+            }
           }
         }
 
@@ -377,6 +499,21 @@ export function createStatusCallback(
           }
         }
 
+        // React with 🎉 on user message to show work completed (replaces 🔥)
+        if (PROGRESS_REACTION_ENABLED) {
+          const msgId = ctx.message?.message_id;
+          const chatId = ctx.chat?.id;
+          if (msgId !== undefined && chatId !== undefined) {
+            try {
+              await ctx.api.setMessageReaction(chatId, msgId, [
+                { type: "emoji", emoji: "🎉" },
+              ]);
+            } catch (error) {
+              console.debug("Failed to set completion reaction:", error);
+            }
+          }
+        }
+
         // Add reaction to last message to indicate turn complete
         if (state.textMessages.size > 0) {
           // Find the last segment (highest segment ID)
@@ -395,7 +532,11 @@ export function createStatusCallback(
         }
       }
     } catch (error) {
-      console.error("Status callback error:", error);
+      // Check if rate limited and notify via reaction
+      const isRateLimited = await handleRateLimitError(ctx, error, state);
+      if (!isRateLimited) {
+        console.error("Status callback error:", error);
+      }
     }
   };
 }

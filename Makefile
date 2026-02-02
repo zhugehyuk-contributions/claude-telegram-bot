@@ -1,4 +1,4 @@
-.PHONY: up install build lint fmt test stop start restart logs errors status install-service uninstall-service reinstall-service \
+.PHONY: up up-force preflight install build lint fmt test stop start restart logs errors status install-service uninstall-service reinstall-service \
 	up-rust build-rust test-rust stop-rust start-rust restart-rust logs-rust errors-rust status-rust \
 	install-service-rust uninstall-service-rust reinstall-service-rust
 
@@ -33,8 +33,40 @@ RUST_ERRFILE = /tmp/$(RUST_SERVICE_NAME).err
 # WSL systemd requires DBUS session bus
 SYSTEMCTL := $(if $(filter 1,$(IS_WSL)),DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$$(id -u)/bus systemctl --user,systemctl --user)
 
-# Full deployment pipeline (reinstalls service on WSL)
-up: install build
+# Preflight checks - must pass before deployment
+preflight:
+	@echo "🔍 Running preflight checks..."
+	@bun run typecheck || (echo "❌ Typecheck failed. Run: bun run typecheck" && exit 1)
+	@bun run lint:check || (echo "❌ Lint errors found. Run: bun run lint:check" && exit 1)
+	@echo "✅ Preflight passed"
+
+# Full deployment pipeline with preflight (reinstalls service on WSL)
+up: install build preflight
+	@echo "🔄 Deploying..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f $(MACOS_PLIST) ]; then \
+			$(MAKE) restart; \
+			echo "✅ Deployment complete - macOS service restarted"; \
+		else \
+			echo "⚠️  macOS: Run 'make install-service' first"; \
+		fi \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		echo "   Updating service file..."; \
+		$(SYSTEMCTL) unmask $(SERVICE_NAME) 2>/dev/null || true; \
+		mkdir -p ~/.config/systemd/user; \
+		printf '[Unit]\nDescription=$(SERVICE_NAME)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\nExecStart=%s run start\nRestart=always\nRestartSec=10\nEnvironment=PATH=%s:/usr/local/bin:/usr/bin:/bin\nStandardOutput=append:$(LOGFILE)\nStandardError=append:$(ERRFILE)\n\n[Install]\nWantedBy=default.target\n' "$(shell pwd)" "$(BUN_PATH)" "$(dir $(BUN_PATH))" > $(SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		$(SYSTEMCTL) enable $(SERVICE_NAME) 2>/dev/null || true; \
+		echo "   Restarting service (will kill current process)..."; \
+		$(SYSTEMCTL) restart $(SERVICE_NAME); \
+		echo "✅ Deployment complete"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
+	fi
+
+# Emergency deployment without preflight (use with caution)
+up-force: install build
+	@echo "⚠️  Skipping preflight checks (emergency mode)..."
 	@echo "🔄 Deploying..."
 	@if [ "$(UNAME_S)" = "Darwin" ]; then \
 		if [ -f $(MACOS_PLIST) ]; then \
