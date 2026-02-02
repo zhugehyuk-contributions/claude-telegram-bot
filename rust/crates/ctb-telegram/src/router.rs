@@ -291,7 +291,7 @@ async fn try_auto_load(
     Ok(true)
 }
 
-fn is_valid_save_id(s: &str) -> bool {
+pub(crate) fn is_valid_save_id(s: &str) -> bool {
     if s.len() != 15 {
         return false;
     }

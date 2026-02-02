@@ -225,6 +225,11 @@ impl ClaudeSession {
         st.total_input_tokens + st.total_output_tokens
     }
 
+    pub async fn needs_save(&self) -> bool {
+        let st = self.state.lock().await;
+        st.context_limit_warned && !st.recently_restored
+    }
+
     pub async fn send_message_streaming(
         &self,
         chat_id: crate::domain::ChatId,
@@ -402,6 +407,8 @@ impl ClaudeSession {
     }
 
     async fn accumulate_usage(&self, u: &TokenUsage) {
+        const CONTEXT_LIMIT: u64 = 200_000;
+        const SAVE_THRESHOLD: u64 = 180_000;
         const COOLDOWN_MESSAGES: u64 = 50;
 
         let mut st = self.state.lock().await;
@@ -422,6 +429,14 @@ impl ClaudeSession {
                 st.recently_restored = false;
                 st.context_limit_warned = false;
             }
+        }
+
+        let current_context = st.total_input_tokens + st.total_output_tokens;
+        if current_context >= SAVE_THRESHOLD && !st.context_limit_warned && !st.recently_restored {
+            st.context_limit_warned = true;
+            eprintln!(
+                "[CTX] context limit approaching: {current_context}/{CONTEXT_LIMIT} (>= {SAVE_THRESHOLD})"
+            );
         }
     }
 }
