@@ -126,6 +126,23 @@ make up
 
 ---
 
+## Rust 포트 (ctb)
+
+Rust 바이너리로 실행/배포하려면:
+
+| 타겟 | 설명 |
+|------|------|
+| `make build-rust` | Rust release 빌드 (`ctb`, `ctb-ask-user-mcp`) |
+| `make up-rust` | Rust 빌드 + 서비스 재시작/설치(플랫폼별) |
+| `make start-rust` | Rust 시작 |
+| `make stop-rust` | Rust 중지 |
+| `make status-rust` | Rust 상태 |
+
+기본 서비스명은 `$(SERVICE_NAME)-rs` (Makefile 변수 `RUST_SERVICE_NAME`)이며,
+WSL에서는 `~/.config/systemd/user/$(RUST_SERVICE_NAME).service` 로 생성됩니다.
+
+---
+
 ## 일반 배포 (권장)
 
 ```bash

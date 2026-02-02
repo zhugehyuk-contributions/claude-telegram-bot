@@ -1,0 +1,20 @@
+[Unit]
+Description=claude-telegram-rs
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/USERNAME/claude-telegram-bot-ts
+ExecStart=/home/USERNAME/claude-telegram-bot-ts/rust/target/release/ctb
+Restart=always
+RestartSec=10
+
+# Some service environments have a minimal PATH; include Homebrew paths for `pdftotext`.
+Environment=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+
+StandardOutput=append:/tmp/claude-telegram-rs.log
+StandardError=append:/tmp/claude-telegram-rs.err
+
+[Install]
+WantedBy=default.target
+

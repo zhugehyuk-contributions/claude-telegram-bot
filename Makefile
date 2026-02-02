@@ -1,4 +1,6 @@
-.PHONY: up up-force preflight install build lint fmt test stop start restart logs errors status install-service uninstall-service reinstall-service
+.PHONY: up up-force preflight install build lint fmt test stop start restart logs errors status install-service uninstall-service reinstall-service \
+	up-rust build-rust test-rust stop-rust start-rust restart-rust logs-rust errors-rust status-rust \
+	install-service-rust uninstall-service-rust reinstall-service-rust
 
 # Detect OS
 UNAME_S := $(shell uname -s)
@@ -13,6 +15,20 @@ PIDFILE = /tmp/$(SERVICE_NAME).pid
 LOGFILE = /tmp/$(SERVICE_NAME).log
 ERRFILE = /tmp/$(SERVICE_NAME).err
 BUN_PATH = $(shell which bun)
+
+# Rust build/run configuration
+RUST_DIR = rust
+RUST_BIN_NAME ?= ctb
+RUST_BIN = $(RUST_DIR)/target/release/$(RUST_BIN_NAME)
+RUST_MCP_BIN = $(RUST_DIR)/target/release/ctb-ask-user-mcp
+
+# Keep TS and Rust services separate by default.
+RUST_SERVICE_NAME ?= $(SERVICE_NAME)-rs
+RUST_MACOS_PLIST = ~/Library/LaunchAgents/com.$(RUST_SERVICE_NAME).plist
+RUST_SYSTEMD_SERVICE = ~/.config/systemd/user/$(RUST_SERVICE_NAME).service
+RUST_PIDFILE = /tmp/$(RUST_SERVICE_NAME).pid
+RUST_LOGFILE = /tmp/$(RUST_SERVICE_NAME).log
+RUST_ERRFILE = /tmp/$(RUST_SERVICE_NAME).err
 
 # WSL systemd requires DBUS session bus
 SYSTEMCTL := $(if $(filter 1,$(IS_WSL)),DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$$(id -u)/bus systemctl --user,systemctl --user)
@@ -217,5 +233,159 @@ status:
 		ps -p $$PID -o pid,etime,rss,args --no-headers 2>/dev/null || true; \
 	else \
 		rm -f $(PIDFILE) 2>/dev/null; \
+		echo "   Not running"; \
+	fi
+
+# ==============================================================================
+# Rust Port Targets
+# ==============================================================================
+
+# Build Rust binaries (release)
+build-rust:
+	@echo "🦀 Building Rust (release)..."
+	@cd $(RUST_DIR) && cargo build -p ctb -p ctb-ask-user-mcp --release
+	@if [ -f $(RUST_BIN) ]; then echo "   ✅ Built $(RUST_BIN)"; else echo "   ❌ Missing $(RUST_BIN)"; exit 1; fi
+	@if [ -f $(RUST_MCP_BIN) ]; then echo "   ✅ Built $(RUST_MCP_BIN)"; else echo "   ❌ Missing $(RUST_MCP_BIN)"; exit 1; fi
+
+# Run Rust tests
+test-rust:
+	@echo "🧪 Testing Rust..."
+	@cd $(RUST_DIR) && cargo test --workspace
+
+# Full Rust deploy pipeline
+up-rust: build-rust
+	@echo "🔄 Deploying Rust..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f $(RUST_MACOS_PLIST) ]; then \
+			$(MAKE) restart-rust; \
+			echo "✅ Rust deployment complete - macOS service restarted"; \
+		else \
+			echo "⚠️  macOS: Run 'make install-service-rust' first (or install the plist manually)"; \
+		fi \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		echo "   Updating Rust systemd service file..."; \
+		$(SYSTEMCTL) unmask $(RUST_SERVICE_NAME) 2>/dev/null || true; \
+		mkdir -p ~/.config/systemd/user; \
+		printf '[Unit]\nDescription=$(RUST_SERVICE_NAME)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\nExecStart=%s\nRestart=always\nRestartSec=10\nEnvironment=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\nStandardOutput=append:$(RUST_LOGFILE)\nStandardError=append:$(RUST_ERRFILE)\n\n[Install]\nWantedBy=default.target\n' "$(shell pwd)" "$(shell pwd)/$(RUST_BIN)" > $(RUST_SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		$(SYSTEMCTL) enable $(RUST_SERVICE_NAME) 2>/dev/null || true; \
+		echo "   Restarting Rust service..."; \
+		$(SYSTEMCTL) restart $(RUST_SERVICE_NAME); \
+		echo "✅ Rust deployment complete"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
+	fi
+
+# Stop Rust service or process
+stop-rust:
+	@echo "🛑 Stopping Rust..."
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(RUST_MACOS_PLIST) ]; then \
+		launchctl unload $(RUST_MACOS_PLIST) 2>/dev/null || true; \
+		echo "   macOS Rust service stopped"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-active $(RUST_SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) stop $(RUST_SERVICE_NAME); \
+		echo "   systemd Rust service stopped"; \
+	elif [ -f $(RUST_PIDFILE) ]; then \
+		kill $$(cat $(RUST_PIDFILE)) 2>/dev/null && echo "   Rust process stopped" || echo "   Rust process already stopped"; \
+		rm -f $(RUST_PIDFILE); \
+	else \
+		echo "   Nothing running"; \
+	fi
+
+# Start Rust service or process
+start-rust:
+	@echo "🚀 Starting Rust..."
+	@if [ ! -f $(RUST_BIN) ]; then \
+		echo "   ❌ Missing $(RUST_BIN). Run: make build-rust"; \
+		exit 1; \
+	fi
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(RUST_MACOS_PLIST) ]; then \
+		launchctl load $(RUST_MACOS_PLIST); sleep 1; \
+		launchctl list | grep com.$(RUST_SERVICE_NAME) && echo "   macOS Rust service running" || echo "   ⚠️  Failed to start"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-enabled $(RUST_SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) start $(RUST_SERVICE_NAME); sleep 1; \
+		$(SYSTEMCTL) is-active $(RUST_SERVICE_NAME) && echo "   systemd Rust service running" || echo "   ⚠️  Failed to start"; \
+	else \
+		nohup $(RUST_BIN) >$(RUST_LOGFILE) 2>$(RUST_ERRFILE) & \
+		echo $$! > $(RUST_PIDFILE); \
+		sleep 1; \
+		if kill -0 $$(cat $(RUST_PIDFILE)) 2>/dev/null; then \
+			echo "   Rust bot running (PID: $$(cat $(RUST_PIDFILE)))"; \
+		else \
+			echo "   ⚠️  Failed to start"; \
+			rm -f $(RUST_PIDFILE); \
+		fi \
+	fi
+
+# Restart Rust service
+restart-rust: stop-rust
+	@sleep 2 && $(MAKE) start-rust
+
+# Install Rust service (one-time setup)
+install-service-rust:
+	@echo "📝 Installing Rust service..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		echo "macOS: Use launchagent/com.claude-telegram-rs.plist.template as a starting point."; \
+		echo "       Copy it to: $(RUST_MACOS_PLIST) (and edit paths/env as needed)"; \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		mkdir -p ~/.config/systemd/user; \
+		printf '[Unit]\nDescription=$(RUST_SERVICE_NAME)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\nExecStart=%s\nRestart=always\nRestartSec=10\nEnvironment=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\nStandardOutput=append:$(RUST_LOGFILE)\nStandardError=append:$(RUST_ERRFILE)\n\n[Install]\nWantedBy=default.target\n' "$(shell pwd)" "$(shell pwd)/$(RUST_BIN)" > $(RUST_SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		$(SYSTEMCTL) enable $(RUST_SERVICE_NAME); \
+		echo "✅ WSL systemd Rust service installed ($(RUST_SERVICE_NAME))"; \
+		echo "   Start with: make start-rust"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
+	fi
+
+# Reinstall Rust service
+reinstall-service-rust: uninstall-service-rust install-service-rust start-rust
+	@echo "✅ Rust service reinstalled and started"
+
+# Uninstall Rust service
+uninstall-service-rust:
+	@echo "🗑️  Uninstalling Rust service..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f $(RUST_MACOS_PLIST) ]; then \
+			launchctl unload $(RUST_MACOS_PLIST) 2>/dev/null || true; \
+			rm -f $(RUST_MACOS_PLIST); \
+			echo "✅ macOS Rust service removed"; \
+		else \
+			echo "   Rust service not installed"; \
+		fi \
+	elif [ "$(IS_WSL)" = "1" ]; then \
+		$(SYSTEMCTL) stop $(RUST_SERVICE_NAME) 2>/dev/null || true; \
+		$(SYSTEMCTL) disable $(RUST_SERVICE_NAME) 2>/dev/null || true; \
+		$(SYSTEMCTL) unmask $(RUST_SERVICE_NAME) 2>/dev/null || true; \
+		rm -f $(RUST_SYSTEMD_SERVICE); \
+		$(SYSTEMCTL) daemon-reload; \
+		echo "✅ WSL systemd Rust service removed"; \
+	else \
+		echo "⚠️  Unsupported platform"; \
+	fi
+
+# View Rust logs
+logs-rust:
+	@echo "📋 Rust logs:"
+	@tail -f $(RUST_LOGFILE)
+
+# View Rust error logs
+errors-rust:
+	@echo "❌ Rust error logs:"
+	@tail -f $(RUST_ERRFILE)
+
+# Rust status
+status-rust:
+	@echo "📊 Rust status:"
+	@if [ "$(UNAME_S)" = "Darwin" ] && [ -f $(RUST_MACOS_PLIST) ]; then \
+		launchctl list | grep com.$(RUST_SERVICE_NAME) || echo "   macOS Rust service not running"; \
+	elif [ "$(IS_WSL)" = "1" ] && $(SYSTEMCTL) is-enabled $(RUST_SERVICE_NAME) >/dev/null 2>&1; then \
+		$(SYSTEMCTL) status $(RUST_SERVICE_NAME) --no-pager || echo "   systemd Rust service not running"; \
+	elif [ -f $(RUST_PIDFILE) ] && kill -0 $$(cat $(RUST_PIDFILE)) 2>/dev/null; then \
+		PID=$$(cat $(RUST_PIDFILE)); \
+		echo "   Rust bot running (PID: $$PID, dev mode)"; \
+		ps -p $$PID -o pid,etime,rss,args --no-headers 2>/dev/null || true; \
+	else \
+		rm -f $(RUST_PIDFILE) 2>/dev/null; \
 		echo "   Not running"; \
 	fi

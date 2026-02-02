@@ -12,6 +12,10 @@ permissionMode: "bypassPermissions"
 allowDangerouslySkipPermissions: true
 ```
 
+Rust port (Claude CLI):
+- `--permission-mode bypassPermissions`
+- `--dangerously-skip-permissions`
+
 This means Claude can:
 - **Read and write files** without asking for confirmation
 - **Execute shell commands** without permission prompts
@@ -162,7 +166,9 @@ Enable JSON format for easier parsing: `AUDIT_LOG_JSON=true`
 
 If you suspect unauthorized access:
 
-1. **Stop the bot**: `launchctl unload ~/Library/LaunchAgents/com.claude-telegram-ts.plist`
+1. **Stop the bot**:
+   - TypeScript/Bun: `launchctl unload ~/Library/LaunchAgents/com.claude-telegram-ts.plist`
+   - Rust port: `launchctl unload ~/Library/LaunchAgents/com.claude-telegram-rs.plist`
 2. **Revoke the Telegram bot token**: Message @BotFather and create a new token
 3. **Review audit logs**: Check `/tmp/claude-telegram-audit.log`
 4. **Check for file changes**: Review recent activity in allowed directories
