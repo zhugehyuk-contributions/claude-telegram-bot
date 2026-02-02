@@ -189,9 +189,9 @@ if (ALLOWED_USERS.length > 0) {
           console.log(`✅ Context restored from ${saveId}`);
 
           // ORACLE: Add telemetry
-          console.log('[TELEMETRY] auto_load_success', {
+          console.log("[TELEMETRY] auto_load_success", {
             saveId,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
 
           session.markRestored(); // Activate cooldown
@@ -212,7 +212,10 @@ if (ALLOWED_USERS.length > 0) {
 
           // S2 FIX: Sanitize error message (don't expose internal paths)
           const errorStr = String(err);
-          const sanitized = errorStr.replace(process.env.HOME || "/home/zhugehyuk", "~");
+          const sanitized = errorStr.replace(
+            process.env.HOME || "/home/zhugehyuk",
+            "~"
+          );
 
           await bot.api.sendMessage(
             ALLOWED_USERS[0]!,
@@ -249,9 +252,19 @@ if (ALLOWED_USERS.length > 0) {
         }
       }
 
+      // Determine startup type for clear messaging
+      let startupType = "";
+      if (contextMessage.includes("restart-context")) {
+        startupType = "🔄 **SIGTERM Restart** (graceful shutdown via make up)";
+      } else if (resumed) {
+        startupType = "♻️ **Session Resumed** (no saved context found)";
+      } else {
+        startupType = "🆕 **Fresh Start** (new session)";
+      }
+
       const startupPrompt = resumed
-        ? `봇이 재시작되었고 이전 세션이 복원되었습니다. 현재 시간과 함께 간단히 알려주세요. (세션 ID: ${session.sessionId?.slice(0, 8)}...)${contextMessage}`
-        : `봇이 방금 재시작되었습니다. 새 세션이 시작됩니다. 현재 시간과 함께 간단한 인사말을 써주세요.${contextMessage}`;
+        ? `${startupType}\n\nBot restarted. Session ID: ${session.sessionId?.slice(0, 8)}...\n\n현재 시간과 함께 간단히 상태를 알려주세요.${contextMessage}`
+        : `${startupType}\n\nBot restarted. New session starting.\n\n현재 시간과 함께 간단한 인사말을 써주세요.${contextMessage}`;
 
       const response = await session.sendMessageStreaming(
         startupPrompt,

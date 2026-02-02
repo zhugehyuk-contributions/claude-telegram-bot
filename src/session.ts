@@ -511,11 +511,11 @@ class ClaudeSession {
       const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
 
       // ORACLE: Add telemetry
-      console.log('[TELEMETRY] context_limit_approaching', {
+      console.log("[TELEMETRY] context_limit_approaching", {
         currentContext,
         threshold: SAVE_THRESHOLD,
         percentage,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
 
       console.warn(

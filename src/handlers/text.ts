@@ -145,10 +145,10 @@ export async function handleText(ctx: Context): Promise<void> {
             console.log(`✅ Save ID captured & verified: ${saveId} → ${saveIdFile}`);
 
             // ORACLE: Add telemetry
-            console.log('[TELEMETRY] auto_save_success', {
+            console.log("[TELEMETRY] auto_save_success", {
               saveId,
               contextTokens: currentTokens,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
             });
 
             await ctx.reply(
@@ -173,7 +173,10 @@ export async function handleText(ctx: Context): Promise<void> {
 
           // S2 FIX: Sanitize error message
           const errorStr = String(error);
-          const sanitized = errorStr.replace(process.env.HOME || "/home/zhugehyuk", "~");
+          const sanitized = errorStr.replace(
+            process.env.HOME || "/home/zhugehyuk",
+            "~"
+          );
 
           await ctx.reply(
             `🚨 **CRITICAL: Auto-Save Failed**\n\n` +
