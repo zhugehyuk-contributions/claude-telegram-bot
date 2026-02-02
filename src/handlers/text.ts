@@ -122,7 +122,9 @@ export async function handleText(ctx: Context): Promise<void> {
             if (!/^\d{8}_\d{6}$/.test(saveId)) {
               console.error(`Invalid save ID format: ${saveId}`);
               console.error(`Full response: ${saveResponse}`);
-              await ctx.reply(`❌ Save ID validation failed: ${saveId}\n\nFull response logged.`);
+              await ctx.reply(
+                `❌ Save ID validation failed: ${saveId}\n\nFull response logged.`
+              );
               return;
             }
 
@@ -130,7 +132,10 @@ export async function handleText(ctx: Context): Promise<void> {
             writeFileSync(saveIdFile, saveId, "utf-8");
 
             // C2 FIX: Verify write succeeded
-            if (!existsSync(saveIdFile) || readFileSync(saveIdFile, "utf-8").trim() !== saveId) {
+            if (
+              !existsSync(saveIdFile) ||
+              readFileSync(saveIdFile, "utf-8").trim() !== saveId
+            ) {
               const error = "Failed to persist save ID - file not written correctly";
               console.error(error);
               await ctx.reply(`❌ ${error}`);
@@ -138,6 +143,14 @@ export async function handleText(ctx: Context): Promise<void> {
             }
 
             console.log(`✅ Save ID captured & verified: ${saveId} → ${saveIdFile}`);
+
+            // ORACLE: Add telemetry
+            console.log('[TELEMETRY] auto_save_success', {
+              saveId,
+              contextTokens: currentTokens,
+              timestamp: new Date().toISOString()
+            });
+
             await ctx.reply(
               `✅ **Context Saved**\n\n` +
                 `Save ID: \`${saveId}\`\n\n` +
@@ -145,12 +158,30 @@ export async function handleText(ctx: Context): Promise<void> {
               { parse_mode: "Markdown" }
             );
           } else {
-            console.warn("Failed to parse save_id from response:", saveResponse.slice(0, 200));
-            await ctx.reply(`⚠️ Save completed but couldn't parse save ID. Response: ${saveResponse.slice(0, 200)}`);
+            console.warn(
+              "Failed to parse save_id from response:",
+              saveResponse.slice(0, 200)
+            );
+            await ctx.reply(
+              `⚠️ Save completed but couldn't parse save ID. Response: ${saveResponse.slice(0, 200)}`
+            );
           }
         } catch (error) {
-          console.error("Auto-save failed:", error);
-          await ctx.reply(`❌ Auto-save failed: ${String(error).slice(0, 200)}`);
+          // S3 FIX: Critical error handling - prevent data loss
+          console.error("CRITICAL: Auto-save failed:", error);
+          console.error("Stack:", error instanceof Error ? error.stack : "N/A");
+
+          // S2 FIX: Sanitize error message
+          const errorStr = String(error);
+          const sanitized = errorStr.replace(process.env.HOME || "/home/zhugehyuk", "~");
+
+          await ctx.reply(
+            `🚨 **CRITICAL: Auto-Save Failed**\n\n` +
+              `Error: ${sanitized.slice(0, 300)}\n\n` +
+              `⚠️ **YOUR WORK IS NOT SAVED**\n\n` +
+              `Do NOT restart. Try manual: /oh-my-claude:save`,
+            { parse_mode: "Markdown" }
+          );
         }
       }
 

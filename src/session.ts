@@ -488,7 +488,8 @@ class ClaudeSession {
     const SAVE_THRESHOLD = 180_000; // Trigger at 90% (20k buffer)
     const COOLDOWN_MESSAGES = 50; // Don't re-trigger for 50 messages after /load
 
-    const currentContext = u.input_tokens || 0;
+    // ORACLE FIX: Use cumulative context, not per-message
+    const currentContext = this.totalInputTokens + this.totalOutputTokens;
 
     // Increment message counter
     if (this.recentlyRestored) {
@@ -507,9 +508,19 @@ class ClaudeSession {
       !this.recentlyRestored
     ) {
       this.contextLimitWarned = true;
+      const percentage = ((currentContext / CONTEXT_LIMIT) * 100).toFixed(1);
+
+      // ORACLE: Add telemetry
+      console.log('[TELEMETRY] context_limit_approaching', {
+        currentContext,
+        threshold: SAVE_THRESHOLD,
+        percentage,
+        timestamp: new Date().toISOString()
+      });
+
       console.warn(
         `⚠️  CONTEXT LIMIT APPROACHING: ${currentContext}/${CONTEXT_LIMIT} tokens ` +
-          `(${((currentContext / CONTEXT_LIMIT) * 100).toFixed(1)}%) - SAVE REQUIRED`
+          `(${percentage}%) - SAVE REQUIRED`
       );
     }
   }
