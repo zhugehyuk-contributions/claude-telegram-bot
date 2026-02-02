@@ -80,6 +80,10 @@ class ClaudeSession {
   private _isProcessing = false;
   private _wasInterruptedByNewMessage = false;
 
+  // Real-time steering buffer
+  private steeringBuffer: string[] = [];
+  private steeringMessageIds: number[] = [];
+
   get isActive(): boolean {
     return this.sessionId !== null;
   }
@@ -90,6 +94,10 @@ class ClaudeSession {
 
   get needsSave(): boolean {
     return this.contextLimitWarned && !this.recentlyRestored;
+  }
+
+  get isProcessing(): boolean {
+    return this._isProcessing;
   }
 
   /**
@@ -121,6 +129,37 @@ class ClaudeSession {
   }
 
   /**
+   * Add a steering message to the buffer (user message sent during Claude execution).
+   */
+  addSteering(message: string, messageId?: number): void {
+    this.steeringBuffer.push(message);
+    if (messageId) {
+      this.steeringMessageIds.push(messageId);
+    }
+  }
+
+  /**
+   * Consume all buffered steering messages and return as combined string.
+   * Clears the buffer after consumption.
+   */
+  consumeSteering(): string | null {
+    if (this.steeringBuffer.length === 0) {
+      return null;
+    }
+    const combined = this.steeringBuffer.join("\n---\n");
+    this.steeringBuffer = [];
+    this.steeringMessageIds = [];
+    return combined;
+  }
+
+  /**
+   * Check if there are any buffered steering messages.
+   */
+  hasSteeringMessages(): boolean {
+    return this.steeringBuffer.length > 0;
+  }
+
+  /**
    * Mark processing as started.
    * Returns a cleanup function to call when done.
    */
@@ -128,6 +167,14 @@ class ClaudeSession {
     this._isProcessing = true;
     return () => {
       this._isProcessing = false;
+      // Clear any unconsumed steering messages
+      if (this.steeringBuffer.length > 0) {
+        console.log(
+          `[STEERING] Clearing ${this.steeringBuffer.length} unconsumed messages`
+        );
+        this.steeringBuffer = [];
+        this.steeringMessageIds = [];
+      }
     };
   }
 
@@ -206,6 +253,29 @@ class ClaudeSession {
       maxThinkingTokens: thinkingTokens,
       additionalDirectories: ALLOWED_PATHS,
       resume: this.sessionId || undefined,
+      // Real-time steering: inject buffered user messages before tool execution
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              async (input) => {
+                const steering = this.consumeSteering();
+                if (!steering) {
+                  return { continue: true };
+                }
+
+                console.log(
+                  `[STEERING] Injecting user message before tool execution`
+                );
+                return {
+                  continue: true,
+                  systemMessage: `[USER SENT MESSAGE DURING EXECUTION]\n${steering}\n[END USER MESSAGE]`,
+                };
+              },
+            ],
+          },
+        ],
+      },
     };
 
     // Add Claude Code executable path if set (required for standalone builds)

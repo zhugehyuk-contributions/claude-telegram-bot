@@ -8,6 +8,7 @@
     "dev": "bun --watch run src/index.ts",
     "typecheck": "bun run --bun tsc --noEmit",
     "lint": "eslint src --ext .ts",
+    "lint:check": "eslint src --ext .ts",
     "fmt": "prettier --write \"src/**/*.ts\"",
     "test": "bun test"
   },

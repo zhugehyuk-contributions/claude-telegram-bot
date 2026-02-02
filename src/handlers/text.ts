@@ -48,6 +48,18 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  // 2.5. Real-time steering: buffer message if Claude is currently executing
+  if (session.isProcessing) {
+    session.addSteering(message, ctx.message?.message_id);
+    console.log(`[STEERING] Buffered user message during execution`);
+    try {
+      await ctx.react("👌");
+    } catch (error) {
+      console.debug("Failed to add steering reaction:", error);
+    }
+    return;
+  }
+
   // 3. Rate limit check
   const [allowed, retryAfter] = rateLimiter.check(userId);
   if (!allowed) {
