@@ -37,6 +37,11 @@ struct SessionState {
     total_cache_create_tokens: u64,
     total_queries: u64,
     last_usage: Option<TokenUsage>,
+
+    // Context-limit tracking parity with TS (used by startup auto-load + future warnings).
+    context_limit_warned: bool,
+    recently_restored: bool,
+    messages_since_restore: u64,
 }
 
 /// High-level session manager (provider-agnostic).
@@ -140,6 +145,9 @@ impl ClaudeSession {
         st.total_cache_create_tokens = 0;
         st.total_queries = 0;
         st.last_usage = None;
+        st.context_limit_warned = false;
+        st.recently_restored = false;
+        st.messages_since_restore = 0;
         Ok(())
     }
 
@@ -199,6 +207,22 @@ impl ClaudeSession {
             total_queries: st.total_queries,
             last_usage: st.last_usage.clone(),
         }
+    }
+
+    /// Mark that the session context was just restored (via `oh-my-claude:load`).
+    ///
+    /// Parity with TS: activates a cooldown window where context-limit warnings should not fire.
+    pub async fn mark_restored(&self) {
+        let mut st = self.state.lock().await;
+        st.recently_restored = true;
+        st.messages_since_restore = 0;
+        st.context_limit_warned = false;
+    }
+
+    /// Current cumulative context tokens (input + output) for this session.
+    pub async fn current_context_tokens(&self) -> u64 {
+        let st = self.state.lock().await;
+        st.total_input_tokens + st.total_output_tokens
     }
 
     pub async fn send_message_streaming(
@@ -378,6 +402,8 @@ impl ClaudeSession {
     }
 
     async fn accumulate_usage(&self, u: &TokenUsage) {
+        const COOLDOWN_MESSAGES: u64 = 50;
+
         let mut st = self.state.lock().await;
         if st.session_start_time.is_none() {
             st.session_start_time = Some(iso_timestamp_utc());
@@ -389,6 +415,14 @@ impl ClaudeSession {
         st.total_cache_create_tokens += u.cache_creation_input_tokens;
         st.total_queries += 1;
         st.last_usage = Some(u.clone());
+
+        if st.recently_restored {
+            st.messages_since_restore += 1;
+            if st.messages_since_restore >= COOLDOWN_MESSAGES {
+                st.recently_restored = false;
+                st.context_limit_warned = false;
+            }
+        }
     }
 }
 
