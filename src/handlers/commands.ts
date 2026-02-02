@@ -116,24 +116,67 @@ export async function handleStart(ctx: Context): Promise<void> {
     `🤖 <b>Claude Telegram Bot</b>\n\n` +
       `Status: ${status}\n` +
       `Working directory: <code>${workDir}</code>\n\n` +
-      `<b>📋 Commands:</b>\n` +
-      `/start - Show this help message\n` +
-      `/new - Start fresh session\n` +
-      `/stop - Stop current query (silent)\n` +
-      `/status - Show current session status\n` +
-      `/stats - Show token usage & cost stats\n` +
-      `/resume - Resume last saved session\n` +
-      `/retry - Retry last message\n` +
-      `/cron [reload] - Scheduled jobs status/reload\n` +
-      `/restart - Restart the bot process\n\n` +
-      `<b>💡 Tips:</b>\n` +
-      `• Prefix with <code>!</code> to interrupt current query\n` +
-      `• Use "think" keyword for extended reasoning (10K tokens)\n` +
-      `• Use "ultrathink" for deep analysis (50K tokens)\n` +
-      `• Send photos, voice messages, or documents\n` +
-      `• Multiple photos = album (auto-grouped)`,
+      `Type /help to see all available commands.`,
     { parse_mode: "HTML" }
   );
+}
+
+/**
+ * /help - Show complete command list with descriptions, usage tips, and examples.
+ */
+export async function handleHelp(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+
+  if (!isAuthorized(userId, ALLOWED_USERS)) {
+    await ctx.reply("Unauthorized.");
+    return;
+  }
+
+  try {
+    await ctx.reply(
+      `⚙️ <b>Available Commands</b>\n\n` +
+        `<b>Session Management:</b>\n` +
+        `/start - Welcome message and status\n` +
+        `/new - Start fresh Claude session\n` +
+        `/resume - Resume last saved session\n` +
+        `/stop - Stop current query (silent)\n` +
+        `/restart - Restart the bot process\n\n` +
+        `<b>Information:</b>\n` +
+        `/status - Show current session details\n` +
+        `/stats - Token usage & cost statistics\n` +
+        `/context - Context window usage (200K limit)\n` +
+        `/help - Show this command list\n\n` +
+        `<b>Utilities:</b>\n` +
+        `/retry - Retry last message\n` +
+        `/cron [reload] - Scheduled jobs status/reload\n\n` +
+        `<b>💡 Tips:</b>\n` +
+        `• Prefix with <code>!</code> to interrupt current query\n` +
+        `• Use "think" keyword for extended reasoning (10K tokens)\n` +
+        `• Use "ultrathink" for deep analysis (50K tokens)\n` +
+        `• Send photos, voice messages, or documents\n` +
+        `• Multiple photos = album (auto-grouped)`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error(
+      "[ERROR:HELP_COMMAND_FAILED] Failed to send help message:",
+      error instanceof Error ? error.message : String(error)
+    );
+
+    // Fallback: Try plain text version
+    try {
+      await ctx.reply(
+        "Available commands:\n" +
+          "/start, /new, /resume, /stop, /restart, /status, /stats, /context, /help, /retry, /cron\n\n" +
+          "For details, contact the administrator."
+      );
+    } catch (fallbackError) {
+      console.error(
+        "[ERROR:HELP_FALLBACK_FAILED] Even plain text help failed:",
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+      );
+    }
+  }
 }
 
 /**
@@ -509,4 +552,71 @@ export async function handleRetry(ctx: Context): Promise<void> {
   } as Context;
 
   await handleText(fakeCtx);
+}
+
+/**
+ * /context - Display context window utilization against 200K input token limit.
+ * Shows current input tokens (which count toward context) vs output tokens (which don't).
+ */
+export async function handleContext(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+
+  if (!isAuthorized(userId, ALLOWED_USERS)) {
+    await ctx.reply("Unauthorized.");
+    return;
+  }
+
+  try {
+    const usage = session.lastUsage;
+
+    if (!usage) {
+      await ctx.reply("⚙️ No token usage data yet. Send a message first.");
+      return;
+    }
+
+    // Validate usage data structure
+    if (
+      typeof usage.input_tokens !== "number" ||
+      typeof usage.output_tokens !== "number"
+    ) {
+      console.error("[ERROR:CONTEXT_INVALID_DATA] Token usage data malformed:", usage);
+      await ctx.reply(
+        "⚠️ Token usage data is incomplete. Try sending a new message to refresh statistics."
+      );
+      return;
+    }
+
+    // Calculate current context window usage
+    // Note: 200K limit is INPUT context only (system + history + user input)
+    // Output tokens have separate limits and don't consume input context
+    const CONTEXT_LIMIT = 200_000;
+    const contextUsed = usage.input_tokens; // Only input counts toward context limit
+    const percentage = ((contextUsed / CONTEXT_LIMIT) * 100).toFixed(1);
+
+    // Format numbers with commas for readability
+    const formatNumber = (n: number): string => n.toLocaleString("en-US");
+
+    await ctx.reply(
+      `⚙️ <b>Context Window Usage</b>\n\n` +
+        `📊 <code>${formatNumber(contextUsed)} / ${formatNumber(CONTEXT_LIMIT)}</code> tokens (<b>${percentage}%</b>)\n\n` +
+        `Input: ${formatNumber(usage.input_tokens)} (context)\n` +
+        `Output: ${formatNumber(usage.output_tokens)} (generated)\n` +
+        (usage.cache_read_input_tokens
+          ? `Cache read: ${formatNumber(usage.cache_read_input_tokens)}\n`
+          : "") +
+        (usage.cache_creation_input_tokens
+          ? `Cache created: ${formatNumber(usage.cache_creation_input_tokens)}\n`
+          : ""),
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error(
+      "[ERROR:CONTEXT_COMMAND_FAILED] Failed to retrieve context usage:",
+      error instanceof Error ? error.message : String(error)
+    );
+    await ctx.reply(
+      "❌ Failed to retrieve context usage. Please try again.\n\n" +
+        "If this persists, restart the session with /new"
+    );
+  }
 }

@@ -24,6 +24,8 @@ import {
   handleStop,
   handleStatus,
   handleStats,
+  handleContext,
+  handleHelp,
   handleResume,
   handleRestart,
   handleRetry,
@@ -109,6 +111,8 @@ bot.command("new", handleNew);
 bot.command("stop", handleStop);
 bot.command("status", handleStatus);
 bot.command("stats", handleStats);
+bot.command("context", handleContext);
+bot.command("help", handleHelp);
 bot.command("resume", handleResume);
 bot.command("restart", handleRestart);
 bot.command("retry", handleRetry);
