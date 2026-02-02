@@ -9,6 +9,8 @@ use teloxide::{
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
 };
 
+use tokio::time::sleep;
+
 pub mod handlers;
 pub mod router;
 
@@ -47,6 +49,28 @@ impl TelegramMessenger {
     fn map_err(e: teloxide::RequestError) -> Error {
         Error::External(format!("telegram error: {e}"))
     }
+
+    async fn with_retry<T, Fut>(&self, mut op: impl FnMut() -> Fut) -> Result<T>
+    where
+        Fut: std::future::IntoFuture<Output = std::result::Result<T, teloxide::RequestError>>,
+        Fut::IntoFuture: Send,
+    {
+        const MAX_RETRIES: usize = 1;
+        let mut attempts = 0usize;
+        loop {
+            match op().await {
+                Ok(v) => return Ok(v),
+                Err(e) => match e {
+                    teloxide::RequestError::RetryAfter(d) if attempts < MAX_RETRIES => {
+                        attempts += 1;
+                        sleep(d).await;
+                        continue;
+                    }
+                    other => return Err(Self::map_err(other)),
+                },
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -64,11 +88,12 @@ impl MessagingPort for TelegramMessenger {
 
     async fn send_html(&self, chat_id: ChatId, html: &str) -> Result<MessageRef> {
         let msg = self
-            .bot
-            .send_message(Self::tg_chat(chat_id), html.to_string())
-            .parse_mode(ParseMode::Html)
-            .await
-            .map_err(Self::map_err)?;
+            .with_retry(|| {
+                self.bot
+                    .send_message(Self::tg_chat(chat_id), html.to_string())
+                    .parse_mode(ParseMode::Html)
+            })
+            .await?;
 
         Ok(MessageRef {
             chat_id,
@@ -77,23 +102,25 @@ impl MessagingPort for TelegramMessenger {
     }
 
     async fn edit_html(&self, msg: MessageRef, html: &str) -> Result<()> {
-        self.bot
-            .edit_message_text(
-                Self::tg_chat(msg.chat_id),
-                Self::tg_msg_id(msg.message_id),
-                html.to_string(),
-            )
-            .parse_mode(ParseMode::Html)
-            .await
-            .map_err(Self::map_err)?;
+        self.with_retry(|| {
+            self.bot
+                .edit_message_text(
+                    Self::tg_chat(msg.chat_id),
+                    Self::tg_msg_id(msg.message_id),
+                    html.to_string(),
+                )
+                .parse_mode(ParseMode::Html)
+        })
+        .await?;
         Ok(())
     }
 
     async fn delete_message(&self, msg: MessageRef) -> Result<()> {
-        self.bot
-            .delete_message(Self::tg_chat(msg.chat_id), Self::tg_msg_id(msg.message_id))
-            .await
-            .map_err(Self::map_err)?;
+        self.with_retry(|| {
+            self.bot
+                .delete_message(Self::tg_chat(msg.chat_id), Self::tg_msg_id(msg.message_id))
+        })
+        .await?;
         Ok(())
     }
 
@@ -103,10 +130,8 @@ impl MessagingPort for TelegramMessenger {
             ChatAction::UploadPhoto => teloxide::types::ChatAction::UploadPhoto,
             ChatAction::UploadDocument => teloxide::types::ChatAction::UploadDocument,
         };
-        self.bot
-            .send_chat_action(Self::tg_chat(chat_id), tg_action)
-            .await
-            .map_err(Self::map_err)?;
+        self.with_retry(|| self.bot.send_chat_action(Self::tg_chat(chat_id), tg_action))
+            .await?;
         Ok(())
     }
 
@@ -129,12 +154,13 @@ impl MessagingPort for TelegramMessenger {
         let markup = InlineKeyboardMarkup::new(rows);
 
         let msg = self
-            .bot
-            .send_message(Self::tg_chat(chat_id), text.to_string())
-            .parse_mode(ParseMode::Html)
-            .reply_markup(markup)
-            .await
-            .map_err(Self::map_err)?;
+            .with_retry(|| {
+                self.bot
+                    .send_message(Self::tg_chat(chat_id), text.to_string())
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(markup.clone())
+            })
+            .await?;
 
         Ok(MessageRef {
             chat_id,
@@ -143,11 +169,14 @@ impl MessagingPort for TelegramMessenger {
     }
 
     async fn answer_callback_query(&self, callback_id: &str, text: Option<&str>) -> Result<()> {
-        let mut req = self.bot.answer_callback_query(callback_id.to_string());
-        if let Some(t) = text {
-            req = req.text(t.to_string());
-        }
-        req.await.map_err(Self::map_err)?;
+        self.with_retry(|| {
+            let mut req = self.bot.answer_callback_query(callback_id.to_string());
+            if let Some(t) = text {
+                req = req.text(t.to_string());
+            }
+            req
+        })
+        .await?;
         Ok(())
     }
 }

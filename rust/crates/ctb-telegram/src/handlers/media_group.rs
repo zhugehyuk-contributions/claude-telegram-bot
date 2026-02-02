@@ -3,7 +3,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Durat
 use teloxide::prelude::*;
 use tokio_util::sync::CancellationToken;
 
-use ctb_core::{domain::ChatId, messaging::port::MessagingPort, utils::AuditEvent};
+use ctb_core::{domain::ChatId, utils::AuditEvent};
 
 use crate::router::AppState;
 

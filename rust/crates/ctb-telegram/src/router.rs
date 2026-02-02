@@ -4,6 +4,7 @@ use teloxide::{dispatching::Dispatcher, dptree, prelude::*};
 
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+use ctb_core::messaging::throttled::{ThrottleConfig, ThrottledMessenger};
 use ctb_core::{
     config::Config, messaging::port::MessagingPort, scheduler::CronScheduler,
     security::RateLimiter, session::ClaudeSession, usage::UsageService, utils::AuditLogger,
@@ -16,7 +17,7 @@ use crate::TelegramMessenger;
 pub struct AppState {
     pub cfg: Arc<Config>,
     pub session: Arc<ClaudeSession>,
-    pub messenger: Arc<TelegramMessenger>,
+    pub messenger: Arc<dyn MessagingPort>,
     pub scheduler: Arc<CronScheduler>,
     pub usage: Arc<UsageService>,
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
@@ -97,12 +98,17 @@ pub async fn run_polling(cfg: Arc<Config>, session: Arc<ClaudeSession>) -> anyho
         }
     }
 
-    let messenger = Arc::new(TelegramMessenger::new(bot.clone()));
-    let messenger_port: Arc<dyn MessagingPort> = messenger.clone();
+    // Wrap the raw Telegram messenger with a throttling decorator to reduce 429s for streaming-heavy
+    // workloads. We still keep a 429 RetryAfter retry at the Telegram adapter layer.
+    let raw_messenger: Arc<dyn MessagingPort> = Arc::new(TelegramMessenger::new(bot.clone()));
+    let messenger: Arc<dyn MessagingPort> = Arc::new(ThrottledMessenger::new(
+        raw_messenger,
+        ThrottleConfig::default(),
+    ));
     let scheduler = Arc::new(CronScheduler::new(
         cfg.clone(),
         session.clone(),
-        messenger_port,
+        messenger.clone(),
     ));
     if let Err(e) = scheduler.start().await {
         eprintln!("[CRON] Failed to start scheduler: {e}");

@@ -5,7 +5,6 @@ use teloxide::prelude::*;
 
 use ctb_core::{
     formatting::escape_html,
-    messaging::port::MessagingPort,
     usage::{AllUsage, ClaudeUsage, CodexUsage, GeminiUsage},
 };
 
