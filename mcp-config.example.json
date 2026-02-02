@@ -1,0 +1,12 @@
+{
+  "ask-user": {
+    "command": "${CTB_REPO_ROOT}/rust/target/release/ctb-ask-user-mcp",
+    "args": [],
+    "env": {}
+  },
+  "typefully": {
+    "type": "http",
+    "url": "https://mcp.typefully.com/mcp?TYPEFULLY_API_KEY=${TYPEFULLY_API_KEY}",
+    "headers": {}
+  }
+}

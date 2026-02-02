@@ -1,0 +1,20 @@
+[package]
+name = "ctb-telegram"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+ctb-core = { path = "../ctb-core" }
+ctb-openai = { path = "../ctb-openai" }
+serde.workspace = true
+serde_json.workspace = true
+teloxide.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[features]
+default = []

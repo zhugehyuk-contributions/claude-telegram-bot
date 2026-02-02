@@ -9,6 +9,10 @@ Send text, voice, photos, and documents. See responses and tools usage in real-t
 
 ![Demo](assets/demo.gif)
 
+This repository contains:
+- The original TypeScript/Bun bot (current default)
+- A Rust port under `rust/` (teloxide + `claude` CLI, feature-parity oriented)
+
 ## Claude Code as a Personal Assistant
 
 I've started using Claude Code as a personal assistant, and I've built this bot so I can access it from anywhere.
@@ -27,10 +31,10 @@ To achieve this, I set up a folder with a CLAUDE.md that teaches Claude about me
 - 📄 **Documents**: PDFs, text files, and archives (ZIP, TAR) are extracted and analyzed
 - 🔄 **Session persistence**: Conversations continue across messages
 - 📨 **Message queuing**: Send multiple messages while Claude works - they queue up automatically. Prefix with `!` or use `/stop` to interrupt and send immediately
-- 🧠 **Extended thinking**: Trigger Claude's reasoning by using words like "think" or "reason" - you'll see its thought process as it works (configurable via `THINKING_TRIGGER_KEYWORDS`)
+- 🧠 **Extended thinking**: Trigger Claude's reasoning by using words like "think" or "reason" - you'll see its thought process as it works (configurable via `THINKING_KEYWORDS` / `THINKING_DEEP_KEYWORDS`)
 - 🔘 **Interactive buttons**: Claude can present options as tappable inline buttons via the built-in `ask_user` MCP tool
 
-## Quick Start
+## Quick Start (TypeScript/Bun)
 
 ```bash
 git clone https://github.com/linuz90/claude-telegram-bot?tab=readme-ov-file
@@ -43,12 +47,36 @@ bun install
 bun run src/index.ts
 ```
 
+## Quick Start (Rust Port)
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+
+# Optional: enable MCP tools (ask_user, etc.)
+cp mcp-config.example.json mcp-config.json
+
+make build-rust
+make start-rust
+```
+
 ### Prerequisites
 
+**TypeScript/Bun**
+
 - **Bun 1.0+** - [Install Bun](https://bun.sh/)
-- **Claude Agent SDK** - `@anthropic-ai/claude-agent-sdk` (installed via bun install)
+- **Claude Agent SDK** - `@anthropic-ai/claude-agent-sdk` (installed via `bun install`)
+
+**Rust port**
+
+- **Rust toolchain** (`cargo`) - via rustup
+- **Claude Code CLI** (`claude`) available on `PATH`
+
+**Shared**
+
 - **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
 - **OpenAI API Key** (optional, for voice transcription)
+- **`pdftotext`** (Poppler) for PDF extraction (`brew install poppler`)
 
 ### Claude Authentication
 
@@ -118,11 +146,20 @@ ALLOWED_PATHS=/your/project,/other/path,~/.claude
 
 ### 3. Configure MCP Servers (Optional)
 
-Copy and edit the MCP config:
+Copy and edit the MCP config.
+
+TypeScript/Bun:
 
 ```bash
-cp mcp-config.ts mcp-config.local.ts
-# Edit mcp-config.local.ts with your MCP servers
+cp mcp-config.example.ts mcp-config.ts
+# Edit mcp-config.ts with your MCP servers
+```
+
+Rust port:
+
+```bash
+cp mcp-config.example.json mcp-config.json
+# Edit mcp-config.json with your MCP servers
 ```
 
 The bot includes a built-in `ask_user` MCP server that lets Claude present options as tappable inline keyboard buttons. Add your own MCP servers (Things, Notion, Typefully, etc.) to give Claude access to your tools.
@@ -140,6 +177,8 @@ The bot includes a built-in `ask_user` MCP server that lets Claude present optio
 
 ## Running as a Service (macOS)
 
+### TypeScript/Bun
+
 ```bash
 cp launchagent/com.claude-telegram-ts.plist.template ~/Library/LaunchAgents/com.claude-telegram-ts.plist
 # Edit the plist with your paths and env vars
@@ -148,6 +187,14 @@ launchctl load ~/Library/LaunchAgents/com.claude-telegram-ts.plist
 
 The bot will start automatically on login and restart if it crashes.
 
+### Rust Port
+
+```bash
+cp launchagent/com.claude-telegram-rs.plist.template ~/Library/LaunchAgents/com.claude-telegram-rs.plist
+# Edit the plist with your paths/env vars and make sure the Rust binaries are built.
+launchctl load ~/Library/LaunchAgents/com.claude-telegram-rs.plist
+```
+
 **Prevent sleep:** To keep the bot running when your Mac is idle, go to **System Settings → Battery → Options** and enable **"Prevent automatic sleeping when the display is off"** (when on power adapter).
 
 **Logs:**
@@ -155,6 +202,8 @@ The bot will start automatically on login and restart if it crashes.
 ```bash
 tail -f /tmp/claude-telegram-bot-ts.log   # stdout
 tail -f /tmp/claude-telegram-bot-ts.err   # stderr
+tail -f /tmp/claude-telegram-rs.log       # rust stdout (if using the template plist)
+tail -f /tmp/claude-telegram-rs.err       # rust stderr (if using the template plist)
 ```
 
 **Shell aliases:** If running as a service, these aliases make it easy to manage the bot (add to `~/.zshrc` or `~/.bashrc`):
@@ -170,14 +219,20 @@ alias cbot-logs='tail -f /tmp/claude-telegram-bot-ts.log'
 ## Development
 
 ```bash
-# Run with auto-reload
+# TypeScript/Bun: run with auto-reload
 bun --watch run src/index.ts
 
-# Type check
+# TypeScript/Bun: type check
 bun run typecheck
 
-# Or directly
+# TypeScript/Bun: or directly
 bun run --bun tsc --noEmit
+
+# Rust port: run
+cd rust && cargo run -p ctb
+
+# Rust port: tests
+cd rust && cargo test --workspace
 ```
 
 ## Security
@@ -189,10 +244,10 @@ bun run --bun tsc --noEmit
 Multiple layers protect against misuse:
 
 1. **User allowlist** - Only your Telegram IDs can use the bot
-2. **Intent classification** - AI filter blocks dangerous requests
+2. **Rate limiting** - Prevents runaway usage
 3. **Path validation** - File access restricted to `ALLOWED_PATHS`
 4. **Command safety** - Destructive patterns like `rm -rf /` are blocked
-5. **Rate limiting** - Prevents runaway usage
+5. **System prompt constraints** - Claude is instructed to ask for confirmation on destructive actions
 6. **Audit logging** - All interactions logged to `/tmp/claude-telegram-audit.log`
 
 ## Troubleshooting

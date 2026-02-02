@@ -24,6 +24,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # user-specific MCP config (use mcp-config.example.ts as template)
 mcp-config.ts
+# user-specific MCP config (Rust)
+mcp-config.json
 
 # caches
 .eslintcache
@@ -39,3 +41,7 @@ mcp-config.ts
 # Finder (MacOS) folder config
 .DS_Store
 /claude-bot-standalone
+
+# Rust (workspace under ./rust)
+rust/target
+rust/**/target
