@@ -65,3 +65,13 @@ Additional types we should handle (defensive parsing):
 Parser rule of thumb for Rust:
 - Keep a strongly-typed model for the events we rely on (`system:init`, `assistant`, `result`).
 - Parse everything else as `Unknown(Value)` and ignore (but log at `trace` with the event `type`).
+
+## Known Limitation: Real-Time Steering
+
+The TS bot can inject “steering” messages during execution using the Agent SDK V1 `PreToolUse`
+hook (it attaches a `systemMessage` just before tool execution).
+
+With the current Rust backend (`claude -p --output-format stream-json`), we spawn a new process per
+run and consume a one-way event stream from stdout; there is no supported API to inject additional
+messages mid-run. As a result, the Rust bot can only process new user messages sequentially (or via
+`!` interrupts), not real-time steering.

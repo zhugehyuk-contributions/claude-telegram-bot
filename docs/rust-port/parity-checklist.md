@@ -82,3 +82,6 @@ This checklist is the “landing the plane” document for the Rust port.
 
 Document any remaining parity gaps here before fully switching off the TS bot.
 
+- Real-time steering (inject user messages during execution via Agent SDK `PreToolUse`) is not
+  supported with the current Rust backend (`claude -p --output-format stream-json`). The Rust bot
+  processes messages sequentially per chat; `!` interrupts are supported.
