@@ -6,7 +6,7 @@ import type { Context } from "grammy";
 import { session } from "../session";
 import { ALLOWED_USERS, WORKING_DIR } from "../config";
 import { isAuthorized, rateLimiter } from "../security";
-import { writeFileSync } from "fs";
+import { writeFileSync, existsSync, readFileSync } from "fs";
 import {
   addTimestamp,
   auditLog,
@@ -117,9 +117,27 @@ export async function handleText(ctx: Context): Promise<void> {
           );
           if (saveIdMatch && saveIdMatch[1]) {
             const saveId = saveIdMatch[1];
+
+            // C1 FIX: Validate save ID format
+            if (!/^\d{8}_\d{6}$/.test(saveId)) {
+              console.error(`Invalid save ID format: ${saveId}`);
+              console.error(`Full response: ${saveResponse}`);
+              await ctx.reply(`❌ Save ID validation failed: ${saveId}\n\nFull response logged.`);
+              return;
+            }
+
             const saveIdFile = `${WORKING_DIR}/.last-save-id`;
             writeFileSync(saveIdFile, saveId, "utf-8");
-            console.log(`✅ Save ID captured: ${saveId} → ${saveIdFile}`);
+
+            // C2 FIX: Verify write succeeded
+            if (!existsSync(saveIdFile) || readFileSync(saveIdFile, "utf-8").trim() !== saveId) {
+              const error = "Failed to persist save ID - file not written correctly";
+              console.error(error);
+              await ctx.reply(`❌ ${error}`);
+              throw new Error(error);
+            }
+
+            console.log(`✅ Save ID captured & verified: ${saveId} → ${saveIdFile}`);
             await ctx.reply(
               `✅ **Context Saved**\n\n` +
                 `Save ID: \`${saveId}\`\n\n` +

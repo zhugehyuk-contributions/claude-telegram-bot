@@ -163,9 +163,18 @@ if (ALLOWED_USERS.length > 0) {
             statusCallback
           );
 
+          // C4 FIX: Validate /load succeeded
+          if (!loadResponse.includes("Loaded Context:")) {
+            console.error(`/load failed - response doesn't contain "Loaded Context:"`);
+            console.error(`Response: ${loadResponse.slice(0, 500)}`);
+            throw new Error(`/load validation failed for save ID: ${saveId}`);
+          }
+
           console.log(`✅ Context restored from ${saveId}`);
           session.markRestored(); // Activate cooldown
-          unlinkSync(saveIdFile); // Delete .last-save-id
+
+          // C3 FIX: Delete .last-save-id AFTER verification
+          unlinkSync(saveIdFile);
 
           await bot.api.sendMessage(
             ALLOWED_USERS[0]!,
